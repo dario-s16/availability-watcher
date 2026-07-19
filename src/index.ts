@@ -7,6 +7,7 @@
 
 import { validateAndConvertToIsbn13 } from "./isbn.js";
 import { isUsedBookAvailableOnLibraccio } from "./libraccio.js";
+import { sendTelegramMessage } from "./telegram.js";
 
 // Reads the first argument supplied by the user.
 // Positions 0 and 1 contain the Node executable and the script path.
@@ -34,6 +35,18 @@ if (isbnInput === undefined) {
 
       if (isUsedAvailable) {
         console.log("Used copy available on Libraccio.");
+
+        const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
+
+        const message =
+          `Used copy available on Libraccio!\n` +
+          `ISBN-13: ${isbn13}\n` +
+          bookUrl;
+
+        // Waits until Telegram confirms that the message was sent.
+        await sendTelegramMessage(message);
+
+        console.log("Telegram notification sent.");
       } else {
         console.log("No used copy currently available on Libraccio.");
       }
@@ -42,7 +55,7 @@ if (isbnInput === undefined) {
       if (error instanceof Error) {
         console.error(`Error: ${error.message}`);
       } else {
-        console.error("Error: Unable to check Libraccio.");
+        console.error("Error: Unable to complete the availability check.");
       }
 
       process.exitCode = 1;
