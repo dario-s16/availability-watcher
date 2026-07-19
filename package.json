@@ -18,7 +18,7 @@
     "start": "node dist/index.js"
   },
   "author": "Dario Santoni",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
