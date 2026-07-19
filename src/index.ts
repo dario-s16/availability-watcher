@@ -6,6 +6,7 @@
  */
 
 import { validateAndConvertToIsbn13 } from "./isbn.js";
+import { isUsedBookAvailableOnLibraccio } from "./libraccio.js";
 
 // Reads the first argument supplied by the user.
 // Positions 0 and 1 contain the Node executable and the script path.
@@ -26,5 +27,25 @@ if (isbnInput === undefined) {
     process.exitCode = 1;
   } else {
     console.log(`ISBN-13: ${isbn13}`);
+
+    try {
+      // Waits for Libraccio to return the availability result.
+      const isUsedAvailable = await isUsedBookAvailableOnLibraccio(isbn13);
+
+      if (isUsedAvailable) {
+        console.log("Used copy available on Libraccio.");
+      } else {
+        console.log("No used copy currently available on Libraccio.");
+      }
+    } catch (error) {
+      // Network and HTTP errors are different from unavailable books.
+      if (error instanceof Error) {
+        console.error(`Error: ${error.message}`);
+      } else {
+        console.error("Error: Unable to check Libraccio.");
+      }
+
+      process.exitCode = 1;
+    }
   }
 }
