@@ -1,0 +1,30 @@
+{
+  "name": "availability-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A learning-first, self-hosted application for monitoring product availability and prices from configurable sources.",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "packageManager": "npm@11.16.0",
+  "scripts": {
+    "build": "tsc",
+    "check": "npm run typecheck && npm run lint && npm run format:check",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "start": "node dist/index.js"
+  },
+  "author": "Dario Santoni",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.3",
+    "eslint": "^10.7.0",
+    "prettier": "3.9.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.64.0"
+  }
+}
