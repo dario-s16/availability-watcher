@@ -6,6 +6,7 @@
  * Updated: 2026-07-23
  */
 
+import { setTimeout as wait } from "node:timers/promises";
 import {
   addProductToWatchlist,
   getPreviousAvailability,
@@ -21,6 +22,8 @@ type PendingCommand = "/watch" | "/unwatch";
 
 const source = "libraccio";
 const allowedChatId = process.env.TELEGRAM_CHAT_ID;
+const checkIntervalMinutes = 30;
+const checkIntervalMilliseconds = checkIntervalMinutes * 60 * 1000;
 
 const helpMessage =
   "Availability Watcher is ready.\n\n" +
@@ -47,22 +50,16 @@ if (
  * Checks a monitored book and returns its current availability.
  */
 async function checkWatchedBook(isbn13: string): Promise<boolean> {
-  // Requests the current availability from Libraccio.
   const isAvailable = await isUsedBookAvailableOnLibraccio(isbn13);
-
-  // Reads the last successful result stored in SQLite.
   const previousAvailability = getPreviousAvailability(source, isbn13);
 
   // Notifies only when the book was not already available.
-  const shouldNotify = isAvailable && previousAvailability !== true;
-
-  if (shouldNotify) {
+  if (isAvailable && previousAvailability !== true) {
     const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
 
-    const message =
-      `Used copy available on Libraccio!\n` + `ISBN-13: ${isbn13}\n` + bookUrl;
-
-    await sendTelegramMessage(message);
+    await sendTelegramMessage(
+      `Used copy available on Libraccio!\n` + `ISBN-13: ${isbn13}\n` + bookUrl,
+    );
   }
 
   // Stores the state only after the check and notification succeed.
@@ -72,7 +69,7 @@ async function checkWatchedBook(isbn13: string): Promise<boolean> {
 }
 
 /**
- * Adds a validated ISBN to the watchlist and performs its first check.
+ * Adds a validated ISBN and performs its first availability check.
  */
 async function addBookToWatchlist(isbn13: string): Promise<void> {
   const wasAdded = addProductToWatchlist(source, isbn13);
@@ -94,15 +91,11 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
       );
     }
   } catch (error) {
-    if (error instanceof Error) {
-      await sendTelegramMessage(
-        `The ISBN was added, but the first check failed:\n${error.message}`,
-      );
-    } else {
-      await sendTelegramMessage(
-        "The ISBN was added, but the first check failed.",
-      );
-    }
+    const reason = error instanceof Error ? `\n${error.message}` : "";
+
+    await sendTelegramMessage(
+      `The ISBN was added, but the first check failed.${reason}`,
+    );
   }
 }
 
@@ -120,7 +113,7 @@ async function removeBookFromWatchlist(isbn13: string): Promise<void> {
 }
 
 /**
- * Validates an ISBN and executes the requested watchlist command.
+ * Validates an ISBN and executes the requested command.
  * Returns false when the ISBN is invalid.
  */
 async function processIsbnCommand(
@@ -158,7 +151,7 @@ async function showWatchlist(): Promise<void> {
 
   const message =
     "Monitored ISBNs:\n" +
-    watchedProducts.map((productCode) => `- ${productCode}`).join("\n");
+    watchedProducts.map((isbn13) => `- ${isbn13}`).join("\n");
 
   await sendTelegramMessage(message);
 }
@@ -192,7 +185,7 @@ async function handleTelegramMessage(text: string): Promise<void> {
       return;
     }
 
-    // A new command interrupts the operation that was waiting for an ISBN.
+    // A new command interrupts the current operation.
     pendingCommand = undefined;
   }
 
@@ -211,7 +204,7 @@ async function handleTelegramMessage(text: string): Promise<void> {
       const action = command === "/watch" ? "monitor" : "remove";
 
       await sendTelegramMessage(
-        `Send me the ISBN of the book you want to ${action}.\n\n` + "/cancel",
+        `Send me the ISBN of the book you want to ${action}.\n\n/cancel`,
       );
     } else {
       await processIsbnCommand(command, isbnInput);
@@ -227,39 +220,70 @@ async function handleTelegramMessage(text: string): Promise<void> {
   }
 }
 
-// Identifies the first Telegram update that has not been handled yet.
-let nextUpdateId = 0;
+/**
+ * Keeps requesting and processing Telegram messages.
+ */
+async function runTelegramBot(): Promise<void> {
+  let nextUpdateId = 0;
 
-console.log("Availability Watcher Telegram bot is running.");
+  while (true) {
+    const updates = await getTelegramUpdates(nextUpdateId);
 
-// Keeps the application running and waiting for Telegram messages.
-while (true) {
-  const updates = await getTelegramUpdates(nextUpdateId);
+    for (const update of updates) {
+      const message = update.message;
 
-  // Processes every update returned by Telegram.
-  for (const update of updates) {
-    const message = update.message;
+      if (
+        message?.text !== undefined &&
+        String(message.chat.id) === allowedChatId
+      ) {
+        console.log(`Received Telegram message: ${message.text}`);
 
-    // Handles only text messages coming from the authorized chat.
-    if (
-      message !== undefined &&
-      message.text !== undefined &&
-      String(message.chat.id) === allowedChatId
-    ) {
-      console.log(`Received Telegram message: ${message.text}`);
+        try {
+          await handleTelegramMessage(message.text);
+        } catch (error) {
+          const reason = error instanceof Error ? `: ${error.message}` : "";
 
-      try {
-        await handleTelegramMessage(message.text);
-      } catch (error) {
-        if (error instanceof Error) {
-          console.error(`Unable to handle Telegram message: ${error.message}`);
-        } else {
-          console.error("Unable to handle Telegram message.");
+          console.error(`Unable to handle Telegram message${reason}`);
         }
+      }
+
+      // Prevents Telegram from returning this update again.
+      nextUpdateId = update.update_id + 1;
+    }
+  }
+}
+
+/**
+ * Periodically checks every ISBN stored in the watchlist.
+ */
+async function runPeriodicChecks(): Promise<void> {
+  while (true) {
+    const watchedProducts = getWatchedProductCodes(source);
+
+    console.log(`Checking ${watchedProducts.length} monitored book(s).`);
+
+    // Checks one book at a time.
+    for (const isbn13 of watchedProducts) {
+      try {
+        const isAvailable = await checkWatchedBook(isbn13);
+        const result = isAvailable ? "available" : "not available";
+
+        console.log(`${isbn13}: ${result}`);
+      } catch (error) {
+        const reason = error instanceof Error ? `: ${error.message}` : "";
+
+        console.error(`Unable to check ${isbn13}${reason}`);
       }
     }
 
-    // The next request will not return this update again.
-    nextUpdateId = update.update_id + 1;
+    console.log(`Next automatic check in ${checkIntervalMinutes} minutes.`);
+
+    // Starts the pause only after all current checks have finished.
+    await wait(checkIntervalMilliseconds);
   }
 }
+
+console.log("Availability Watcher is running.");
+
+// Keeps the Telegram bot and automatic checks running together.
+await Promise.all([runTelegramBot(), runPeriodicChecks()]);
