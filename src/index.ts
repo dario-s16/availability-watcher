@@ -24,6 +24,8 @@ const source = "libraccio";
 const allowedChatId = process.env.TELEGRAM_CHAT_ID;
 const checkIntervalMinutes = 30;
 const checkIntervalMilliseconds = checkIntervalMinutes * 60 * 1000;
+const requestDelaySeconds = 3;
+const requestDelayMilliseconds = requestDelaySeconds * 1000;
 
 const helpMessage =
   "Availability Watcher is ready.\n\n" +
@@ -259,6 +261,7 @@ async function runTelegramBot(): Promise<void> {
 async function runPeriodicChecks(): Promise<void> {
   while (true) {
     const watchedProducts = getWatchedProductCodes(source);
+    let checkedBooks = 0;
 
     console.log(`Checking ${watchedProducts.length} monitored book(s).`);
 
@@ -274,11 +277,18 @@ async function runPeriodicChecks(): Promise<void> {
 
         console.error(`Unable to check ${isbn13}${reason}`);
       }
+
+      checkedBooks += 1;
+
+      // Pauses only when another Libraccio request still has to be made.
+      if (checkedBooks < watchedProducts.length) {
+        await wait(requestDelayMilliseconds);
+      }
     }
 
     console.log(`Next automatic check in ${checkIntervalMinutes} minutes.`);
 
-    // Starts the pause only after all current checks have finished.
+    // Starts the interval only after all current checks have finished.
     await wait(checkIntervalMilliseconds);
   }
 }
