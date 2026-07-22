@@ -3,6 +3,7 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
+ * Updated: 2026-07-22
  */
 
 import { mkdirSync } from "node:fs";
@@ -13,6 +14,9 @@ mkdirSync("data", { recursive: true });
 
 // Opens the database file or creates it on the first execution.
 const database = new Database("data/availability-watcher.db");
+
+// Enables relationships between SQLite tables for this connection.
+database.pragma("foreign_keys = ON");
 
 // Creates the required tables only when they do not already exist.
 database.exec(`
@@ -26,15 +30,19 @@ database.exec(`
   ) STRICT;
 
   CREATE TABLE IF NOT EXISTS availability_status (
-    id INTEGER PRIMARY KEY,
-    source TEXT NOT NULL,
-    product_code TEXT NOT NULL,
+    watch_id INTEGER PRIMARY KEY,
     is_available INTEGER NOT NULL CHECK (is_available IN (0, 1)),
     last_checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    UNIQUE (source, product_code)
+    FOREIGN KEY (watch_id)
+      REFERENCES watches (id)
+      ON DELETE CASCADE
   ) STRICT;
 `);
+
+interface WatchRow {
+  id: number;
+}
 
 interface WatchedProductRow {
   product_code: string;
@@ -69,7 +77,7 @@ export function addProductToWatchlist(
 }
 
 /**
- * Removes a product from the watchlist.
+ * Removes a product and its availability state from the watchlist.
  * Returns false when the product was not being monitored.
  */
 export function removeProductFromWatchlist(
@@ -116,9 +124,12 @@ export function getPreviousAvailability(
   const row = database
     .prepare(
       `
-        SELECT is_available
+        SELECT availability_status.is_available
         FROM availability_status
-        WHERE source = ? AND product_code = ?
+        INNER JOIN watches
+          ON watches.id = availability_status.watch_id
+        WHERE watches.source = ?
+          AND watches.product_code = ?
       `,
     )
     .get(source, productCode) as AvailabilityRow | undefined;
@@ -138,20 +149,33 @@ export function saveAvailability(
   productCode: string,
   isAvailable: boolean,
 ): void {
+  const watch = database
+    .prepare(
+      `
+        SELECT id
+        FROM watches
+        WHERE source = ? AND product_code = ?
+      `,
+    )
+    .get(source, productCode) as WatchRow | undefined;
+
+  if (watch === undefined) {
+    throw new Error("Cannot save availability for an unmonitored product.");
+  }
+
   database
     .prepare(
       `
         INSERT INTO availability_status (
-          source,
-          product_code,
+          watch_id,
           is_available
         )
-        VALUES (?, ?, ?)
-        ON CONFLICT (source, product_code)
+        VALUES (?, ?)
+        ON CONFLICT (watch_id)
         DO UPDATE SET
           is_available = excluded.is_available,
           last_checked_at = CURRENT_TIMESTAMP
       `,
     )
-    .run(source, productCode, isAvailable ? 1 : 0);
+    .run(watch.id, isAvailable ? 1 : 0);
 }
