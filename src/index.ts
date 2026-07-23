@@ -3,7 +3,7 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
- * Updated: 2026-07-23
+ * Updated: 2026-07-24
  */
 
 import { setTimeout as wait } from "node:timers/promises";
@@ -22,10 +22,15 @@ type PendingCommand = "/watch" | "/unwatch";
 
 const source = "libraccio";
 const allowedChatId = process.env.TELEGRAM_CHAT_ID;
+
 const checkIntervalMinutes = 30;
 const checkIntervalMilliseconds = checkIntervalMinutes * 60 * 1000;
+
 const requestDelaySeconds = 3;
 const requestDelayMilliseconds = requestDelaySeconds * 1000;
+
+const telegramRetryDelaySeconds = 5;
+const telegramRetryDelayMilliseconds = telegramRetryDelaySeconds * 1000;
 
 const helpMessage =
   "Availability Watcher is ready.\n\n" +
@@ -229,28 +234,38 @@ async function runTelegramBot(): Promise<void> {
   let nextUpdateId = 0;
 
   while (true) {
-    const updates = await getTelegramUpdates(nextUpdateId);
+    try {
+      const updates = await getTelegramUpdates(nextUpdateId);
 
-    for (const update of updates) {
-      const message = update.message;
+      for (const update of updates) {
+        const message = update.message;
 
-      if (
-        message?.text !== undefined &&
-        String(message.chat.id) === allowedChatId
-      ) {
-        console.log(`Received Telegram message: ${message.text}`);
+        if (
+          message?.text !== undefined &&
+          String(message.chat.id) === allowedChatId
+        ) {
+          console.log(`Received Telegram message: ${message.text}`);
 
-        try {
-          await handleTelegramMessage(message.text);
-        } catch (error) {
-          const reason = error instanceof Error ? `: ${error.message}` : "";
+          try {
+            await handleTelegramMessage(message.text);
+          } catch (error) {
+            const reason = error instanceof Error ? `: ${error.message}` : "";
 
-          console.error(`Unable to handle Telegram message${reason}`);
+            console.error(`Unable to handle Telegram message${reason}`);
+          }
         }
-      }
 
-      // Prevents Telegram from returning this update again.
-      nextUpdateId = update.update_id + 1;
+        // Prevents Telegram from returning this update again.
+        nextUpdateId = update.update_id + 1;
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? `: ${error.message}` : "";
+
+      console.error(`Unable to receive Telegram messages${reason}`);
+      console.log(`Retrying Telegram in ${telegramRetryDelaySeconds} seconds.`);
+
+      // A temporary network error must not stop the application.
+      await wait(telegramRetryDelayMilliseconds);
     }
   }
 }
