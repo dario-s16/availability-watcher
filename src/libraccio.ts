@@ -3,35 +3,57 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
+ * Updated: 2026-07-25
  */
 
 const libraccioBookUrl = "https://www.libraccio.it/libro";
 
+export type LibraccioAvailability = "available" | "unavailable" | "not-found";
+
 /**
- * Sends an HTTP request to the Libraccio page for an ISBN.
- * The returned Promise will contain true when a used copy is available,
- * or false when both used-book identifiers are absent.
+ * Checks whether Libraccio has a page and a used copy for an ISBN.
+ * Network and unexpected HTTP errors are reported as exceptions.
  */
-export async function isUsedBookAvailableOnLibraccio(
+export async function checkUsedBookAvailabilityOnLibraccio(
   isbn13: string,
-): Promise<boolean> {
-  const url = `${libraccioBookUrl}/${isbn13}/book.html`;
+): Promise<LibraccioAvailability> {
+  const requestedUrl = `${libraccioBookUrl}/${isbn13}/book.html`;
 
-  // Sends an HTTP GET request and waits for the Libraccio response.
-  // Redirects to the complete book URL are followed automatically.
-  const response = await fetch(url);
+  // Sends an HTTP GET request and follows redirects automatically.
+  const response = await fetch(requestedUrl);
 
-  // HTTP errors must not be mistaken for an unavailable used book.
+  // A 404 means that Libraccio has no page for this ISBN.
+  if (response.status === 404) {
+    return "not-found";
+  }
+
+  // Other HTTP errors must not be mistaken for product availability.
   if (!response.ok) {
     throw new Error(`Libraccio returned HTTP status ${response.status}.`);
   }
 
-  // Reads the response body and converts the downloaded HTML into a string.
+  // Converts the downloaded HTML response into searchable text.
   const html = await response.text();
+
+  const hasExpectedUrl = response.url.startsWith(
+    `${libraccioBookUrl}/${isbn13}/`,
+  );
+  const hasExpectedIsbn = html.includes(isbn13);
+  const hasProductStructure =
+    html.includes("C_C_ProductDetail") || html.includes("product-detail");
+
+  // Prevents an unexpected page from being saved as unavailable.
+  if (!hasExpectedUrl || !hasExpectedIsbn || !hasProductStructure) {
+    throw new Error("Libraccio returned an unexpected product page.");
+  }
 
   const hasUsedBuyLink = html.includes("bBuyULink");
   const hasUsedBuyClass = html.includes("acquista-usato");
 
   // One matching identifier is sufficient to report used availability.
-  return hasUsedBuyLink || hasUsedBuyClass;
+  if (hasUsedBuyLink || hasUsedBuyClass) {
+    return "available";
+  }
+
+  return "unavailable";
 }

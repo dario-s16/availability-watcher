@@ -3,10 +3,10 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
- * Updated: 2026-07-24
+ * Updated: 2026-07-25
  */
 
-import { setTimeout as wait } from "node:timers/promises";
+import { setTimeout } from "node:timers/promises";
 import {
   addProductToWatchlist,
   getPreviousAvailability,
@@ -15,7 +15,10 @@ import {
   saveAvailability,
 } from "./database.js";
 import { validateAndConvertToIsbn13 } from "./isbn.js";
-import { isUsedBookAvailableOnLibraccio } from "./libraccio.js";
+import {
+  checkUsedBookAvailabilityOnLibraccio,
+  type LibraccioAvailability,
+} from "./libraccio.js";
 import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
 
 type PendingCommand = "/watch" | "/unwatch";
@@ -54,10 +57,19 @@ if (
 }
 
 /**
- * Checks a monitored book and returns its current availability.
+ * Checks a monitored book and returns its current Libraccio status.
  */
-async function checkWatchedBook(isbn13: string): Promise<boolean> {
-  const isAvailable = await isUsedBookAvailableOnLibraccio(isbn13);
+async function checkWatchedBook(
+  isbn13: string,
+): Promise<LibraccioAvailability> {
+  const availability = await checkUsedBookAvailabilityOnLibraccio(isbn13);
+
+  // A missing page is not an availability state to save.
+  if (availability === "not-found") {
+    return availability;
+  }
+
+  const isAvailable = availability === "available";
   const previousAvailability = getPreviousAvailability(source, isbn13);
 
   // Notifies only when the book was not already available.
@@ -72,7 +84,7 @@ async function checkWatchedBook(isbn13: string): Promise<boolean> {
   // Stores the state only after the check and notification succeed.
   saveAvailability(source, isbn13, isAvailable);
 
-  return isAvailable;
+  return availability;
 }
 
 /**
@@ -90,9 +102,16 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
   await sendTelegramMessage(`ISBN added: ${isbn13}\nChecking Libraccio...`);
 
   try {
-    const isAvailable = await checkWatchedBook(isbn13);
+    const availability = await checkWatchedBook(isbn13);
 
-    if (!isAvailable) {
+    if (availability === "not-found") {
+      // Removes an ISBN that has no corresponding Libraccio page.
+      removeProductFromWatchlist(source, isbn13);
+
+      await sendTelegramMessage(
+        `ISBN removed: Libraccio has no page for ${isbn13}.`,
+      );
+    } else if (availability === "unavailable") {
       await sendTelegramMessage(
         "No used copy currently available on Libraccio.",
       );
@@ -265,7 +284,7 @@ async function runTelegramBot(): Promise<void> {
       console.log(`Retrying Telegram in ${telegramRetryDelaySeconds} seconds.`);
 
       // A temporary network error must not stop the application.
-      await wait(telegramRetryDelayMilliseconds);
+      await setTimeout(telegramRetryDelayMilliseconds);
     }
   }
 }
@@ -283,8 +302,14 @@ async function runPeriodicChecks(): Promise<void> {
     // Checks one book at a time.
     for (const isbn13 of watchedProducts) {
       try {
-        const isAvailable = await checkWatchedBook(isbn13);
-        const result = isAvailable ? "available" : "not available";
+        const availability = await checkWatchedBook(isbn13);
+        let result = "available";
+
+        if (availability === "unavailable") {
+          result = "not available";
+        } else if (availability === "not-found") {
+          result = "page not found";
+        }
 
         console.log(`${isbn13}: ${result}`);
       } catch (error) {
@@ -297,14 +322,14 @@ async function runPeriodicChecks(): Promise<void> {
 
       // Pauses only when another Libraccio request still has to be made.
       if (checkedBooks < watchedProducts.length) {
-        await wait(requestDelayMilliseconds);
+        await setTimeout(requestDelayMilliseconds);
       }
     }
 
     console.log(`Next automatic check in ${checkIntervalMinutes} minutes.`);
 
     // Starts the interval only after all current checks have finished.
-    await wait(checkIntervalMilliseconds);
+    await setTimeout(checkIntervalMilliseconds);
   }
 }
 
