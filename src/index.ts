@@ -102,27 +102,30 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
 
   await sendTelegramMessage(`ISBN added: ${isbn13}\nChecking Libraccio...`);
 
+  let availability: LibraccioAvailability;
+
   try {
-    const availability = await checkWatchedBook(isbn13);
-
-    if (availability === "not-found") {
-      // Removes an ISBN that has no corresponding Libraccio page.
-      removeProductFromWatchlist(source, isbn13);
-
-      await sendTelegramMessage(
-        `ISBN removed: Libraccio has no page for ${isbn13}.`,
-      );
-    } else if (availability === "unavailable") {
-      await sendTelegramMessage(
-        "No used copy currently available on Libraccio.",
-      );
-    }
+    availability = await checkWatchedBook(isbn13);
   } catch (error) {
     const reason = error instanceof Error ? `\n${error.message}` : "";
 
     await sendTelegramMessage(
-      `The ISBN was added, but the first check failed.${reason}`,
+      `The ISBN was added, but the first availability check ` +
+        `could not be completed.${reason}`,
     );
+
+    return;
+  }
+
+  if (availability === "not-found") {
+    // Removes an ISBN that has no corresponding Libraccio page.
+    removeProductFromWatchlist(source, isbn13);
+
+    await sendTelegramMessage(
+      `ISBN removed: Libraccio has no page for ${isbn13}.`,
+    );
+  } else if (availability === "unavailable") {
+    await sendTelegramMessage("No used copy currently available on Libraccio.");
   }
 }
 
