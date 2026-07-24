@@ -11,6 +11,7 @@ import {
   addProductToWatchlist,
   getPreviousAvailability,
   getWatchedProductCodes,
+  getWatchlist,
   removeProductFromWatchlist,
   saveAvailability,
 } from "./database.js";
@@ -164,20 +165,36 @@ async function processIsbnCommand(
 }
 
 /**
- * Sends the ISBNs currently stored in the watchlist.
+ * Sends monitored ISBNs with their last saved availability state.
  */
 async function showWatchlist(): Promise<void> {
-  const watchedProducts = getWatchedProductCodes(source);
+  const watchlist = getWatchlist(source);
 
-  if (watchedProducts.length === 0) {
+  if (watchlist.length === 0) {
     await sendTelegramMessage("The watchlist is empty.");
 
     return;
   }
 
-  const message =
-    "Monitored ISBNs:\n" +
-    watchedProducts.map((isbn13) => `- ${isbn13}`).join("\n");
+  const books = watchlist.map((item) => {
+    if (item.isAvailable === undefined || item.lastCheckedAt === undefined) {
+      return (
+        `- ISBN: ${item.productCode}\n` +
+        "  Used copy: unknown\n" +
+        "  Status not saved yet"
+      );
+    }
+
+    const availability = item.isAvailable ? "available" : "not available";
+
+    return (
+      `- ISBN: ${item.productCode}\n` +
+      `  Used copy: ${availability}\n` +
+      `  Status updated: ${item.lastCheckedAt} UTC`
+    );
+  });
+
+  const message = "Monitored books:\n\n" + books.join("\n\n");
 
   await sendTelegramMessage(message);
 }

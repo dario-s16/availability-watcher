@@ -3,7 +3,7 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
- * Updated: 2026-07-22
+ * Updated: 2026-07-25
  */
 
 import { mkdirSync } from "node:fs";
@@ -50,6 +50,18 @@ interface WatchedProductRow {
 
 interface AvailabilityRow {
   is_available: number;
+}
+
+interface WatchlistItemRow {
+  product_code: string;
+  is_available: number | null;
+  last_checked_at: string | null;
+}
+
+export interface WatchlistItem {
+  productCode: string;
+  isAvailable: boolean | undefined;
+  lastCheckedAt: string | undefined;
 }
 
 /**
@@ -112,6 +124,33 @@ export function getWatchedProductCodes(source: string): string[] {
     .all(source) as WatchedProductRow[];
 
   return rows.map((row) => row.product_code);
+}
+
+/**
+ * Returns monitored products with their last saved availability state.
+ */
+export function getWatchlist(source: string): WatchlistItem[] {
+  const rows = database
+    .prepare(
+      `
+        SELECT
+          watches.product_code,
+          availability_status.is_available,
+          availability_status.last_checked_at
+        FROM watches
+        LEFT JOIN availability_status
+          ON availability_status.watch_id = watches.id
+        WHERE watches.source = ?
+        ORDER BY watches.id
+      `,
+    )
+    .all(source) as WatchlistItemRow[];
+
+  return rows.map((row) => ({
+    productCode: row.product_code,
+    isAvailable: row.is_available === null ? undefined : row.is_available === 1,
+    lastCheckedAt: row.last_checked_at ?? undefined,
+  }));
 }
 
 /**
