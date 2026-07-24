@@ -49,11 +49,19 @@ export async function checkUsedBookAvailabilityOnLibraccio(
 
   const hasUsedBuyLink = html.includes("bBuyULink");
   const hasUsedBuyClass = html.includes("acquista-usato");
+  const usedAvailability = html.match(/'availabilityUsed':'(SI|NO)'/)?.[1];
 
-  // One matching identifier is sufficient to report used availability.
-  if (hasUsedBuyLink || hasUsedBuyClass) {
+  // Any positive used-book identifier is sufficient.
+  if (hasUsedBuyLink || hasUsedBuyClass || usedAvailability === "SI") {
     return "available";
   }
 
-  return "unavailable";
+  // Unavailability requires an explicit negative value.
+  if (usedAvailability === "NO") {
+    return "unavailable";
+  }
+
+  throw new Error(
+    "Libraccio returned unexpected used-book availability information.",
+  );
 }
