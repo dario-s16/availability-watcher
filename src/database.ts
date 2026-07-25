@@ -1,5 +1,5 @@
 /**
- * Stores and retrieves monitored products and availability states using SQLite.
+ * Stores and retrieves products, watches, and availability states using SQLite.
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
@@ -20,27 +20,42 @@ database.pragma("foreign_keys = ON");
 
 // Creates the required tables only when they do not already exist.
 database.exec(`
+  CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY,
+    product_code TEXT NOT NULL UNIQUE,
+    title TEXT,
+    authors TEXT,
+    publication_year INTEGER,
+    publisher TEXT,
+    metadata_source TEXT
+  ) STRICT;
+
   CREATE TABLE IF NOT EXISTS watches (
     id INTEGER PRIMARY KEY,
     source TEXT NOT NULL,
-    product_code TEXT NOT NULL,
+    product_id INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_available INTEGER,
+    last_checked_at TEXT,
 
-    UNIQUE (source, product_code)
-  ) STRICT;
+    UNIQUE (source, product_id),
 
-  CREATE TABLE IF NOT EXISTS availability_status (
-    watch_id INTEGER PRIMARY KEY,
-    is_available INTEGER NOT NULL CHECK (is_available IN (0, 1)),
-    last_checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (product_id)
+      REFERENCES products (id)
+      ON DELETE CASCADE,
 
-    FOREIGN KEY (watch_id)
-      REFERENCES watches (id)
-      ON DELETE CASCADE
+    CHECK (
+      (is_available IS NULL AND last_checked_at IS NULL)
+      OR
+      (
+        is_available IN (0, 1)
+        AND last_checked_at IS NOT NULL
+      )
+    )
   ) STRICT;
 `);
 
-interface WatchRow {
+interface ProductRow {
   id: number;
 }
 
@@ -49,7 +64,7 @@ interface WatchedProductRow {
 }
 
 interface AvailabilityRow {
-  is_available: number;
+  is_available: number | null;
 }
 
 interface WatchlistItemRow {
@@ -65,32 +80,58 @@ export interface WatchlistItem {
 }
 
 /**
- * Adds a product to the watchlist.
+ * Adds a product to the registry and watchlist.
  * Returns false when the product is already being monitored.
  */
 export function addProductToWatchlist(
   source: string,
   productCode: string,
 ): boolean {
+  database
+    .prepare(
+      `
+        INSERT INTO products (
+          product_code
+        )
+        VALUES (?)
+        ON CONFLICT (product_code) DO NOTHING
+      `,
+    )
+    .run(productCode);
+
+  const product = database
+    .prepare(
+      `
+        SELECT id
+        FROM products
+        WHERE product_code = ?
+      `,
+    )
+    .get(productCode) as ProductRow | undefined;
+
+  if (product === undefined) {
+    throw new Error("Unable to find the product after adding it.");
+  }
+
   const result = database
     .prepare(
       `
         INSERT INTO watches (
           source,
-          product_code
+          product_id
         )
         VALUES (?, ?)
-        ON CONFLICT (source, product_code) DO NOTHING
+        ON CONFLICT (source, product_id) DO NOTHING
       `,
     )
-    .run(source, productCode);
+    .run(source, product.id);
 
   return result.changes === 1;
 }
 
 /**
- * Removes a product and its availability state from the watchlist.
- * Returns false when the product was not being monitored.
+ * Removes a watch.
+ * The product remains in the registry for possible future use.
  */
 export function removeProductFromWatchlist(
   source: string,
@@ -100,7 +141,12 @@ export function removeProductFromWatchlist(
     .prepare(
       `
         DELETE FROM watches
-        WHERE source = ? AND product_code = ?
+        WHERE source = ?
+          AND product_id = (
+            SELECT id
+            FROM products
+            WHERE product_code = ?
+          )
       `,
     )
     .run(source, productCode);
@@ -115,10 +161,12 @@ export function getWatchedProductCodes(source: string): string[] {
   const rows = database
     .prepare(
       `
-        SELECT product_code
+        SELECT products.product_code
         FROM watches
-        WHERE source = ?
-        ORDER BY id
+        INNER JOIN products
+          ON products.id = watches.product_id
+        WHERE watches.source = ?
+        ORDER BY watches.id
       `,
     )
     .all(source) as WatchedProductRow[];
@@ -134,12 +182,12 @@ export function getWatchlist(source: string): WatchlistItem[] {
     .prepare(
       `
         SELECT
-          watches.product_code,
-          availability_status.is_available,
-          availability_status.last_checked_at
+          products.product_code,
+          watches.is_available,
+          watches.last_checked_at
         FROM watches
-        LEFT JOIN availability_status
-          ON availability_status.watch_id = watches.id
+        INNER JOIN products
+          ON products.id = watches.product_id
         WHERE watches.source = ?
         ORDER BY watches.id
       `,
@@ -163,17 +211,17 @@ export function getPreviousAvailability(
   const row = database
     .prepare(
       `
-        SELECT availability_status.is_available
-        FROM availability_status
-        INNER JOIN watches
-          ON watches.id = availability_status.watch_id
+        SELECT watches.is_available
+        FROM watches
+        INNER JOIN products
+          ON products.id = watches.product_id
         WHERE watches.source = ?
-          AND watches.product_code = ?
+          AND products.product_code = ?
       `,
     )
     .get(source, productCode) as AvailabilityRow | undefined;
 
-  if (row === undefined) {
+  if (row === undefined || row.is_available === null) {
     return undefined;
   }
 
@@ -181,40 +229,31 @@ export function getPreviousAvailability(
 }
 
 /**
- * Inserts a new availability state or updates the existing one.
+ * Updates the availability state of a monitored product.
  */
 export function saveAvailability(
   source: string,
   productCode: string,
   isAvailable: boolean,
 ): void {
-  const watch = database
+  const result = database
     .prepare(
       `
-        SELECT id
-        FROM watches
-        WHERE source = ? AND product_code = ?
+        UPDATE watches
+        SET
+          is_available = ?,
+          last_checked_at = CURRENT_TIMESTAMP
+        WHERE source = ?
+          AND product_id = (
+            SELECT id
+            FROM products
+            WHERE product_code = ?
+          )
       `,
     )
-    .get(source, productCode) as WatchRow | undefined;
+    .run(isAvailable ? 1 : 0, source, productCode);
 
-  if (watch === undefined) {
+  if (result.changes !== 1) {
     throw new Error("Cannot save availability for an unmonitored product.");
   }
-
-  database
-    .prepare(
-      `
-        INSERT INTO availability_status (
-          watch_id,
-          is_available
-        )
-        VALUES (?, ?)
-        ON CONFLICT (watch_id)
-        DO UPDATE SET
-          is_available = excluded.is_available,
-          last_checked_at = CURRENT_TIMESTAMP
-      `,
-    )
-    .run(watch.id, isAvailable ? 1 : 0);
 }
