@@ -7,6 +7,7 @@
  */
 
 import { setTimeout } from "node:timers/promises";
+import { getBookMetadata } from "./book-metadata.js";
 import {
   addProductToWatchlist,
   getPreviousAvailability,
@@ -14,6 +15,7 @@ import {
   getWatchlist,
   removeProductFromWatchlist,
   saveAvailability,
+  saveProductMetadata,
 } from "./database.js";
 import { validateAndConvertToIsbn13 } from "./isbn.js";
 import {
@@ -124,9 +126,26 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
     await sendTelegramMessage(
       `ISBN removed: Libraccio has no page for ${isbn13}.`,
     );
-  } else if (availability === "unavailable") {
+
+    return;
+  }
+
+  if (availability === "unavailable") {
     await sendTelegramMessage("No used copy currently available on Libraccio.");
   }
+
+  // Metadata is optional and is requested only for a valid Libraccio page.
+  const metadata = await getBookMetadata(isbn13);
+
+  if (metadata === undefined) {
+    console.log(`No metadata found for ${isbn13}.`);
+
+    return;
+  }
+
+  saveProductMetadata(isbn13, metadata);
+
+  console.log(`Metadata saved for ${isbn13} from ${metadata.source}.`);
 }
 
 /**
@@ -168,7 +187,25 @@ async function processIsbnCommand(
 }
 
 /**
- * Sends monitored ISBNs with their last saved availability state.
+ * Converts a UTC timestamp stored by SQLite into Italian date and time.
+ */
+function formatUtcDateForItaly(utcDateText: string): string {
+  // Converts "2026-07-25 13:31:24" into a timestamp recognized as UTC.
+  const date = new Date(`${utcDateText.replace(" ", "T")}Z`);
+
+  return new Intl.DateTimeFormat("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/Rome",
+  }).format(date);
+}
+
+/**
+ * Sends monitored books with their metadata and latest availability state.
  */
 async function showWatchlist(): Promise<void> {
   const watchlist = getWatchlist(source);
@@ -180,24 +217,36 @@ async function showWatchlist(): Promise<void> {
   }
 
   const books = watchlist.map((item) => {
-    if (item.isAvailable === undefined || item.lastCheckedAt === undefined) {
-      return (
-        `- ISBN: ${item.productCode}\n` +
-        "  Used copy: unknown\n" +
-        "  Status not saved yet"
-      );
-    }
+    const title = item.title ?? "not available";
+    const authors = item.authors ?? "not available";
+    const editionYear = item.editionYear?.toString() ?? "not available";
+    const publisher = item.publisher ?? "not available";
 
-    const availability = item.isAvailable ? "available" : "not available";
+    const availability =
+      item.isAvailable === undefined
+        ? "unknown"
+        : item.isAvailable
+          ? "available"
+          : "not available";
+
+    const statusUpdated =
+      item.lastCheckedAt === undefined
+        ? "not available"
+        : formatUtcDateForItaly(item.lastCheckedAt);
 
     return (
-      `- ISBN: ${item.productCode}\n` +
+      `- Title: ${title}\n` +
+      `  Authors: ${authors}\n` +
+      `  ISBN: ${item.productCode}\n` +
+      `  Edition year: ${editionYear}\n` +
+      `  Publisher: ${publisher}\n` +
       `  Used copy: ${availability}\n` +
-      `  Status updated: ${item.lastCheckedAt} UTC`
+      `  Status updated: ${statusUpdated}`
     );
   });
 
-  const message = "Monitored books:\n\n" + books.join("\n\n");
+  const message =
+    `Monitored books: ${watchlist.length}\n\n` + books.join("\n\n");
 
   await sendTelegramMessage(message);
 }

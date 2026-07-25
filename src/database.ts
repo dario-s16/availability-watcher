@@ -8,6 +8,7 @@
 
 import { mkdirSync } from "node:fs";
 import Database from "better-sqlite3";
+import type { BookMetadata } from "./book-metadata.js";
 
 // Creates the data directory if it does not already exist.
 mkdirSync("data", { recursive: true });
@@ -25,7 +26,7 @@ database.exec(`
     product_code TEXT NOT NULL UNIQUE,
     title TEXT,
     authors TEXT,
-    publication_year INTEGER,
+    edition_year INTEGER,
     publisher TEXT,
     metadata_source TEXT
   ) STRICT;
@@ -69,12 +70,20 @@ interface AvailabilityRow {
 
 interface WatchlistItemRow {
   product_code: string;
+  title: string | null;
+  authors: string | null;
+  edition_year: number | null;
+  publisher: string | null;
   is_available: number | null;
   last_checked_at: string | null;
 }
 
 export interface WatchlistItem {
   productCode: string;
+  title: string | undefined;
+  authors: string | undefined;
+  editionYear: number | undefined;
+  publisher: string | undefined;
   isAvailable: boolean | undefined;
   lastCheckedAt: string | undefined;
 }
@@ -130,6 +139,40 @@ export function addProductToWatchlist(
 }
 
 /**
+ * Saves product information without erasing previously known optional values.
+ */
+export function saveProductMetadata(
+  productCode: string,
+  metadata: BookMetadata,
+): void {
+  const result = database
+    .prepare(
+      `
+        UPDATE products
+        SET
+          title = ?,
+          authors = COALESCE(?, authors),
+          edition_year = COALESCE(?, edition_year),
+          publisher = COALESCE(?, publisher),
+          metadata_source = ?
+        WHERE product_code = ?
+      `,
+    )
+    .run(
+      metadata.title,
+      metadata.authors ?? null,
+      metadata.editionYear ?? null,
+      metadata.publisher ?? null,
+      metadata.source,
+      productCode,
+    );
+
+  if (result.changes !== 1) {
+    throw new Error("Cannot save metadata for an unknown product.");
+  }
+}
+
+/**
  * Removes a watch.
  * The product remains in the registry for possible future use.
  */
@@ -175,7 +218,7 @@ export function getWatchedProductCodes(source: string): string[] {
 }
 
 /**
- * Returns monitored products with their last saved availability state.
+ * Returns monitored products with their metadata and availability state.
  */
 export function getWatchlist(source: string): WatchlistItem[] {
   const rows = database
@@ -183,6 +226,10 @@ export function getWatchlist(source: string): WatchlistItem[] {
       `
         SELECT
           products.product_code,
+          products.title,
+          products.authors,
+          products.edition_year,
+          products.publisher,
           watches.is_available,
           watches.last_checked_at
         FROM watches
@@ -196,6 +243,10 @@ export function getWatchlist(source: string): WatchlistItem[] {
 
   return rows.map((row) => ({
     productCode: row.product_code,
+    title: row.title ?? undefined,
+    authors: row.authors ?? undefined,
+    editionYear: row.edition_year ?? undefined,
+    publisher: row.publisher ?? undefined,
     isAvailable: row.is_available === null ? undefined : row.is_available === 1,
     lastCheckedAt: row.last_checked_at ?? undefined,
   }));
