@@ -420,6 +420,17 @@ async function runPeriodicChecks(): Promise<void> {
     for (const isbn13 of productsDueForCheck) {
       try {
         const libraccioBook = await getLibraccioBookData(isbn13);
+        const storedProduct = getProductDetails(isbn13);
+
+        // Reuses metadata from the availability request for older empty records.
+        if (
+          storedProduct?.title === undefined &&
+          libraccioBook.metadata !== undefined
+        ) {
+          saveProductMetadata(isbn13, libraccioBook.metadata);
+
+          console.log(`Metadata saved for ${isbn13} from Libraccio.`);
+        }
 
         await saveAvailabilityAndNotifyIfNeeded(
           isbn13,
