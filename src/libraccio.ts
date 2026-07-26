@@ -9,6 +9,7 @@
 import type { BookMetadata } from "./book-metadata.js";
 
 const libraccioBookUrl = "https://www.libraccio.it/libro";
+const libraccioRequestTimeoutMilliseconds = 15000;
 
 export type LibraccioAvailability = "available" | "unavailable" | "not-found";
 
@@ -99,8 +100,10 @@ export async function getLibraccioBookData(
 ): Promise<LibraccioBookData> {
   const requestedUrl = `${libraccioBookUrl}/${isbn13}/book.html`;
 
-  // Sends one HTTP GET request and follows redirects automatically.
-  const response = await fetch(requestedUrl);
+  // Stops the request if Libraccio does not respond within 15 seconds.
+  const response = await fetch(requestedUrl, {
+    signal: AbortSignal.timeout(libraccioRequestTimeoutMilliseconds),
+  });
 
   // A 404 means that Libraccio has no page for this ISBN.
   if (response.status === 404) {
