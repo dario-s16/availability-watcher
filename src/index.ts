@@ -262,16 +262,16 @@ async function showWatchlist(): Promise<void> {
     }
 
     if (item.editionYear !== undefined) {
-      lines.push(`Edition year: ${item.editionYear}`);
+      lines.push(`${item.editionYear} · ISBN ${item.productCode}`);
+    } else {
+      lines.push(`ISBN ${item.productCode}`);
     }
 
-    lines.push(`ISBN: ${item.productCode}`);
-
     if (item.lastCheckedAt === undefined) {
-      lines.push("Used availability checked: no successful check yet");
+      lines.push("Used-copy check: never completed");
     } else {
       lines.push(
-        `Used availability checked: ${formatUtcDateForItaly(item.lastCheckedAt)}`,
+        `Used-copy check: ${formatUtcDateForItaly(item.lastCheckedAt)}`,
       );
     }
 
