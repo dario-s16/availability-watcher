@@ -155,7 +155,8 @@ async function showRemoveBookKeyboard(
 }
 
 /**
- * Saves a global availability result and notifies interested users.
+ * Saves global availability and notifies interested users.
+ * The requesting Chat ID is used only for manual additions.
  */
 async function saveAvailabilityAndNotifyIfNeeded(
   isbn13: string,
@@ -170,16 +171,12 @@ async function saveAvailabilityAndNotifyIfNeeded(
   const isAvailable = availability === "available";
   const previousAvailability = getPreviousAvailability(source, isbn13);
 
-  if (isAvailable) {
-    let chatIdsToNotify: number[] = [];
-
-    // A new transition to available interests every user watching the book.
-    if (previousAvailability !== true) {
-      chatIdsToNotify = getTelegramChatIdsWatchingProduct(source, isbn13);
-    } else if (requestingChatId !== undefined) {
-      // A new watcher must be informed even when the book was already available.
-      chatIdsToNotify = [requestingChatId];
-    }
+  // A transition to available interests every existing watcher.
+  if (isAvailable && previousAvailability !== true) {
+    const chatIdsToNotify = getTelegramChatIdsWatchingProduct(
+      source,
+      isbn13,
+    ).filter((telegramChatId) => telegramChatId !== requestingChatId);
 
     if (chatIdsToNotify.length > 0) {
       const product = getProductDetails(isbn13);
@@ -196,15 +193,7 @@ async function saveAvailabilityAndNotifyIfNeeded(
 
       for (const telegramChatId of chatIdsToNotify) {
         try {
-          const options =
-            telegramChatId === requestingChatId
-              ? {
-                  keyboard: mainKeyboard,
-                  persistentKeyboard: true,
-                }
-              : undefined;
-
-          await sendTelegramMessage(telegramChatId, notification, options);
+          await sendTelegramMessage(telegramChatId, notification);
         } catch (error) {
           const reason = error instanceof Error ? `: ${error.message}` : "";
 
@@ -219,6 +208,43 @@ async function saveAvailabilityAndNotifyIfNeeded(
 
   // The shared state is stored after all notification attempts.
   saveAvailability(source, isbn13, isAvailable);
+}
+
+/**
+ * Confirms which book was added and shows its current used availability.
+ */
+async function sendBookAddedConfirmation(
+  telegramChatId: number,
+  isbn13: string,
+  isAvailable: boolean,
+): Promise<void> {
+  const product = getProductDetails(isbn13);
+  const title = product?.title ?? "Title not available";
+  const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
+
+  const lines = ["✅ Book added to your watchlist.", "", `📖 ${title}`];
+
+  if (product?.authors !== undefined) {
+    lines.push(`Authors: ${product.authors}`);
+  }
+
+  lines.push(
+    `ISBN: ${isbn13}`,
+    `Used copy: ${
+      isAvailable ? "✅ available now" : "❌ not currently available"
+    }`,
+    "",
+  );
+
+  if (isAvailable) {
+    lines.push("🔔 I will keep monitoring this book.");
+  } else {
+    lines.push("🔔 I will notify you when a used copy becomes available.");
+  }
+
+  lines.push("", bookUrl);
+
+  await sendMainMenuMessage(telegramChatId, lines.join("\n"));
 }
 
 /**
@@ -255,7 +281,7 @@ async function addBookToWatchlist(
 
   await sendTelegramMessage(
     telegramChatId,
-    `ISBN added: ${isbn13}\nChecking Libraccio...`,
+    `🔄 Checking ISBN ${isbn13} on Libraccio...`,
   );
 
   let libraccioBook;
@@ -263,12 +289,14 @@ async function addBookToWatchlist(
   try {
     libraccioBook = await getLibraccioBookData(isbn13);
   } catch (error) {
-    const reason = error instanceof Error ? `\n${error.message}` : "";
+    const reason = error instanceof Error ? `\nReason: ${error.message}` : "";
 
     await sendMainMenuMessage(
       telegramChatId,
-      `The ISBN was added, but the first availability check ` +
-        `could not be completed.${reason}`,
+      `⚠️ Book saved, but the first Libraccio check ` +
+        `could not be completed.\n\n` +
+        `ISBN: ${isbn13}${reason}\n\n` +
+        `The automatic checks will try again.`,
     );
 
     return;
@@ -280,7 +308,8 @@ async function addBookToWatchlist(
 
     await sendMainMenuMessage(
       telegramChatId,
-      `ISBN removed: Libraccio has no page for ${isbn13}.`,
+      `⚠️ Libraccio has no page for ISBN ${isbn13}.\n\n` +
+        `The book was not added to your watchlist.`,
     );
 
     return;
@@ -303,12 +332,11 @@ async function addBookToWatchlist(
     telegramChatId,
   );
 
-  if (libraccioBook.availability === "unavailable") {
-    await sendMainMenuMessage(
-      telegramChatId,
-      "No used copy currently available on Libraccio.",
-    );
-  }
+  await sendBookAddedConfirmation(
+    telegramChatId,
+    isbn13,
+    libraccioBook.availability === "available",
+  );
 }
 
 /**
