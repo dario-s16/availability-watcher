@@ -3,7 +3,7 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
- * Updated: 2026-07-23
+ * Updated: 2026-07-26
  */
 
 /**
@@ -67,10 +67,15 @@ export async function getTelegramUpdates(
 }
 
 /**
- * Sends a text message to the Telegram chat configured in the environment.
- * The returned Promise completes without a value when the message is sent.
+ * Sends a message using optional Telegram formatting and link preview settings.
  */
-export async function sendTelegramMessage(message: string): Promise<void> {
+export async function sendTelegramMessage(
+  message: string,
+  options: {
+    parseMode?: "HTML";
+    disableLinkPreview?: boolean;
+  } = {},
+): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
 
@@ -79,7 +84,10 @@ export async function sendTelegramMessage(message: string): Promise<void> {
     throw new Error("Telegram configuration is missing.");
   }
 
-  // Sends the chat ID and message text to the Telegram Bot API.
+  const linkPreviewOptions =
+    options.disableLinkPreview === true ? { is_disabled: true } : undefined;
+
+  // Sends the chat ID, text, and optional settings to the Telegram Bot API.
   const response = await fetch(
     `https://api.telegram.org/bot${token}/sendMessage`,
     {
@@ -90,6 +98,8 @@ export async function sendTelegramMessage(message: string): Promise<void> {
       body: JSON.stringify({
         chat_id: chatId,
         text: message,
+        parse_mode: options.parseMode,
+        link_preview_options: linkPreviewOptions,
       }),
     },
   );

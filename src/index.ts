@@ -210,7 +210,17 @@ function formatUtcDateForItaly(utcDateText: string): string {
 }
 
 /**
- * Sends monitored books with their metadata and latest availability state.
+ * Escapes text received from external metadata before using Telegram HTML.
+ */
+function escapeTelegramHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+/**
+ * Sends one compact list with book links and latest used availability.
  */
 async function showWatchlist(): Promise<void> {
   const watchlist = getWatchlist(source);
@@ -221,39 +231,64 @@ async function showWatchlist(): Promise<void> {
     return;
   }
 
+  const availableCount = watchlist.filter(
+    (item) => item.isAvailable === true,
+  ).length;
+
+  const unavailableCount = watchlist.filter(
+    (item) => item.isAvailable === false,
+  ).length;
+
+  const unknownCount = watchlist.filter(
+    (item) => item.isAvailable === undefined,
+  ).length;
+
   const books = watchlist.map((item) => {
-    const title = item.title ?? "not available";
-    const authors = item.authors ?? "not available";
-    const editionYear = item.editionYear?.toString() ?? "not available";
-    const publisher = item.publisher ?? "not available";
+    const title = escapeTelegramHtml(item.title ?? "Title not available");
 
-    const availability =
-      item.isAvailable === undefined
-        ? "❔ unknown"
-        : item.isAvailable
-          ? "✅ available"
-          : "❌ not available";
+    const authors =
+      item.authors === undefined ? undefined : escapeTelegramHtml(item.authors);
 
-    const statusUpdated =
-      item.lastCheckedAt === undefined
-        ? "not available"
-        : formatUtcDateForItaly(item.lastCheckedAt);
+    const availabilityIcon =
+      item.isAvailable === undefined ? "❔" : item.isAvailable ? "✅" : "❌";
 
-    return (
-      `- Title: ${title}\n` +
-      `  Authors: ${authors}\n` +
-      `  ISBN: ${item.productCode}\n` +
-      `  Edition year: ${editionYear}\n` +
-      `  Publisher: ${publisher}\n` +
-      `  Used copy: ${availability}\n` +
-      `  Status updated: ${statusUpdated}`
-    );
+    const bookUrl =
+      `https://www.libraccio.it/libro/` + `${item.productCode}/book.html`;
+
+    const lines = [`${availabilityIcon} <a href="${bookUrl}">${title}</a>`];
+
+    if (authors !== undefined) {
+      lines.push(`Authors: ${authors}`);
+    }
+
+    if (item.editionYear !== undefined) {
+      lines.push(`Edition year: ${item.editionYear}`);
+    }
+
+    lines.push(`ISBN: ${item.productCode}`);
+
+    if (item.lastCheckedAt === undefined) {
+      lines.push("Used availability checked: no successful check yet");
+    } else {
+      lines.push(
+        `Used availability checked: ${formatUtcDateForItaly(item.lastCheckedAt)}`,
+      );
+    }
+
+    return lines.join("\n");
   });
 
   const message =
-    `Monitored books: ${watchlist.length}\n\n` + books.join("\n\n");
+    `📚 Monitored books: ${watchlist.length}\n` +
+    `Used copies: ✅ ${availableCount} available · ` +
+    `❌ ${unavailableCount} unavailable · ` +
+    `❔ ${unknownCount} unknown\n\n` +
+    books.join("\n\n");
 
-  await sendTelegramMessage(message);
+  await sendTelegramMessage(message, {
+    parseMode: "HTML",
+    disableLinkPreview: true,
+  });
 }
 
 /**
