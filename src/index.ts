@@ -39,6 +39,27 @@ const requestDelayMilliseconds = requestDelaySeconds * 1000;
 const telegramRetryDelaySeconds = 5;
 const telegramRetryDelayMilliseconds = telegramRetryDelaySeconds * 1000;
 
+const addBookButton = "➕ Add book";
+const listBooksButton = "📚 Monitored books";
+const removeBookButton = "🗑 Remove book";
+const helpButton = "❓ Help";
+const cancelButton = "✖ Cancel";
+
+// This keyboard provides the main actions on mobile.
+const mainKeyboard = [
+  [addBookButton, helpButton],
+  [listBooksButton, removeBookButton],
+];
+
+// Converts friendly button labels into the existing slash commands.
+const buttonCommands: Record<string, string> = {
+  [addBookButton]: "/watch",
+  [listBooksButton]: "/list",
+  [removeBookButton]: "/unwatch",
+  [helpButton]: "/help",
+  [cancelButton]: "/cancel",
+};
+
 const helpMessage =
   "Availability Watcher is ready.\n\n" +
   "Available commands:\n" +
@@ -61,11 +82,76 @@ if (
 }
 
 /**
+ * Sends a message and shows the main Telegram keyboard.
+ */
+async function sendMainMenuMessage(message: string): Promise<void> {
+  await sendTelegramMessage(message, {
+    keyboard: mainKeyboard,
+    persistentKeyboard: true,
+  });
+}
+
+/**
+ * Shortens long titles so removal buttons remain readable on mobile.
+ */
+function shortenBookTitle(title: string): string {
+  const maximumLength = 40;
+
+  if (title.length <= maximumLength) {
+    return title;
+  }
+
+  return `${title.slice(0, maximumLength - 1)}…`;
+}
+
+/**
+ * Extracts the ISBN contained at the end of a removal button.
+ */
+function getIsbnFromRemovalButton(buttonText: string): string {
+  const match = buttonText.match(/\[(\d{13})\]$/);
+
+  return match?.[1] ?? buttonText;
+}
+
+/**
+ * Shows one removal button for every monitored book.
+ */
+async function showRemoveBookKeyboard(
+  message = "Choose the book you want to remove.",
+): Promise<void> {
+  const watchlist = getWatchlist(source);
+
+  if (watchlist.length === 0) {
+    pendingCommand = undefined;
+    await sendMainMenuMessage("The watchlist is empty.");
+
+    return;
+  }
+
+  // Cancel remains the first and easiest action to reach.
+  const removeKeyboard = [[cancelButton]];
+
+  for (const item of watchlist) {
+    const title = shortenBookTitle(item.title ?? "Title not available");
+
+    removeKeyboard.push([`${title} [${item.productCode}]`]);
+  }
+
+  pendingCommand = "/unwatch";
+
+  await sendTelegramMessage(message, {
+    keyboard: removeKeyboard,
+    oneTimeKeyboard: true,
+  });
+}
+
+/**
  * Saves an availability result and sends a notification when needed.
  */
 async function saveAvailabilityAndNotifyIfNeeded(
   isbn13: string,
   availability: LibraccioAvailability,
+  showMainKeyboard = false,
 ): Promise<void> {
   // A missing page is not an availability state to save.
   if (availability === "not-found") {
@@ -88,6 +174,12 @@ async function saveAvailabilityAndNotifyIfNeeded(
         `Authors: ${authors}\n` +
         `ISBN: ${isbn13}\n\n` +
         bookUrl,
+      showMainKeyboard
+        ? {
+            keyboard: mainKeyboard,
+            persistentKeyboard: true,
+          }
+        : undefined,
     );
   }
 
@@ -102,7 +194,7 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
   const wasAdded = addProductToWatchlist(source, isbn13);
 
   if (!wasAdded) {
-    await sendTelegramMessage(`ISBN already monitored: ${isbn13}`);
+    await sendMainMenuMessage(`ISBN already monitored: ${isbn13}`);
 
     return;
   }
@@ -116,7 +208,7 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
   } catch (error) {
     const reason = error instanceof Error ? `\n${error.message}` : "";
 
-    await sendTelegramMessage(
+    await sendMainMenuMessage(
       `The ISBN was added, but the first availability check ` +
         `could not be completed.${reason}`,
     );
@@ -128,7 +220,7 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
     // Removes an ISBN that has no corresponding Libraccio page.
     removeProductFromWatchlist(source, isbn13);
 
-    await sendTelegramMessage(
+    await sendMainMenuMessage(
       `ISBN removed: Libraccio has no page for ${isbn13}.`,
     );
 
@@ -146,10 +238,14 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
     console.log(`Metadata saved for ${isbn13} from ${metadata.source}.`);
   }
 
-  await saveAvailabilityAndNotifyIfNeeded(isbn13, libraccioBook.availability);
+  await saveAvailabilityAndNotifyIfNeeded(
+    isbn13,
+    libraccioBook.availability,
+    true,
+  );
 
   if (libraccioBook.availability === "unavailable") {
-    await sendTelegramMessage("No used copy currently available on Libraccio.");
+    await sendMainMenuMessage("No used copy currently available on Libraccio.");
   }
 }
 
@@ -160,9 +256,9 @@ async function removeBookFromWatchlist(isbn13: string): Promise<void> {
   const wasRemoved = removeProductFromWatchlist(source, isbn13);
 
   if (wasRemoved) {
-    await sendTelegramMessage(`ISBN removed: ${isbn13}`);
+    await sendMainMenuMessage(`ISBN removed: ${isbn13}`);
   } else {
-    await sendTelegramMessage(`ISBN not found in the watchlist: ${isbn13}`);
+    await sendMainMenuMessage(`ISBN not found in the watchlist: ${isbn13}`);
   }
 }
 
@@ -226,7 +322,7 @@ async function showWatchlist(): Promise<void> {
   const watchlist = getWatchlist(source);
 
   if (watchlist.length === 0) {
-    await sendTelegramMessage("The watchlist is empty.");
+    await sendMainMenuMessage("The watchlist is empty.");
 
     return;
   }
@@ -288,6 +384,8 @@ async function showWatchlist(): Promise<void> {
   await sendTelegramMessage(message, {
     parseMode: "HTML",
     disableLinkPreview: true,
+    keyboard: mainKeyboard,
+    persistentKeyboard: true,
   });
 }
 
@@ -295,26 +393,39 @@ async function showWatchlist(): Promise<void> {
  * Interprets one authorized Telegram text message.
  */
 async function handleTelegramMessage(text: string): Promise<void> {
-  const messageText = text.trim();
+  const receivedText = text.trim();
+
+  // Button labels are translated before the normal command logic runs.
+  const messageText = buttonCommands[receivedText] ?? receivedText;
 
   if (pendingCommand !== undefined) {
     if (messageText === "/cancel") {
       pendingCommand = undefined;
-      await sendTelegramMessage("Operation canceled.");
+      await sendMainMenuMessage("Operation canceled.");
 
       return;
     }
 
     if (!messageText.startsWith("/")) {
-      const wasIsbnValid = await processIsbnCommand(
-        pendingCommand,
-        messageText,
-      );
+      const currentCommand = pendingCommand;
+
+      const isbnInput =
+        currentCommand === "/unwatch"
+          ? getIsbnFromRemovalButton(messageText)
+          : messageText;
+
+      const wasIsbnValid = await processIsbnCommand(currentCommand, isbnInput);
 
       if (wasIsbnValid) {
         pendingCommand = undefined;
+      } else if (currentCommand === "/watch") {
+        await sendTelegramMessage("Send another ISBN or use /cancel.", {
+          removeKeyboard: true,
+        });
       } else {
-        await sendTelegramMessage("Send another ISBN or use /cancel.");
+        await showRemoveBookKeyboard(
+          "That selection is not valid. Choose a book or cancel.",
+        );
       }
 
       return;
@@ -331,25 +442,32 @@ async function handleTelegramMessage(text: string): Promise<void> {
   const isbnInput = commandParts.slice(1).join("");
 
   if (command === "/start" || command === "/help") {
-    await sendTelegramMessage(helpMessage);
-  } else if (command === "/watch" || command === "/unwatch") {
+    await sendMainMenuMessage(helpMessage);
+  } else if (command === "/watch") {
     if (isbnInput === "") {
-      pendingCommand = command;
-
-      const action = command === "/watch" ? "monitor" : "remove";
+      pendingCommand = "/watch";
 
       await sendTelegramMessage(
-        `Send me the ISBN of the book you want to ${action}.\n\n/cancel`,
+        "Send me the ISBN of the book you want to monitor.\n\n/cancel",
+        {
+          removeKeyboard: true,
+        },
       );
     } else {
-      await processIsbnCommand(command, isbnInput);
+      await processIsbnCommand("/watch", isbnInput);
+    }
+  } else if (command === "/unwatch") {
+    if (isbnInput === "") {
+      await showRemoveBookKeyboard();
+    } else {
+      await processIsbnCommand("/unwatch", isbnInput);
     }
   } else if (command === "/list") {
     await showWatchlist();
   } else if (command === "/cancel") {
-    await sendTelegramMessage("There is no operation to cancel.");
+    await sendMainMenuMessage("There is no operation to cancel.");
   } else {
-    await sendTelegramMessage(
+    await sendMainMenuMessage(
       "Unknown command. Send /help to see the available commands.",
     );
   }

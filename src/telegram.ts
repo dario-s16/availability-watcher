@@ -7,6 +7,18 @@
  */
 
 /**
+ * Describes optional presentation settings for a Telegram message.
+ */
+interface TelegramMessageOptions {
+  parseMode?: "HTML";
+  disableLinkPreview?: boolean;
+  keyboard?: string[][];
+  persistentKeyboard?: boolean;
+  oneTimeKeyboard?: boolean;
+  removeKeyboard?: boolean;
+}
+
+/**
  * Describes the Telegram update fields used by this application.
  */
 export interface TelegramUpdate {
@@ -67,14 +79,11 @@ export async function getTelegramUpdates(
 }
 
 /**
- * Sends a message using optional Telegram formatting and link preview settings.
+ * Sends a message with optional formatting and keyboard settings.
  */
 export async function sendTelegramMessage(
   message: string,
-  options: {
-    parseMode?: "HTML";
-    disableLinkPreview?: boolean;
-  } = {},
+  options: TelegramMessageOptions = {},
 ): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -86,6 +95,28 @@ export async function sendTelegramMessage(
 
   const linkPreviewOptions =
     options.disableLinkPreview === true ? { is_disabled: true } : undefined;
+
+  let replyMarkup: object | undefined;
+
+  if (options.keyboard !== undefined) {
+    // Converts every button label into the structure required by Telegram.
+    const keyboard = options.keyboard.map((row) =>
+      row.map((buttonText) => ({
+        text: buttonText,
+      })),
+    );
+
+    replyMarkup = {
+      keyboard,
+      resize_keyboard: true,
+      is_persistent: options.persistentKeyboard,
+      one_time_keyboard: options.oneTimeKeyboard,
+    };
+  } else if (options.removeKeyboard === true) {
+    replyMarkup = {
+      remove_keyboard: true,
+    };
+  }
 
   // Sends the chat ID, text, and optional settings to the Telegram Bot API.
   const response = await fetch(
@@ -100,6 +131,7 @@ export async function sendTelegramMessage(
         text: message,
         parse_mode: options.parseMode,
         link_preview_options: linkPreviewOptions,
+        reply_markup: replyMarkup,
       }),
     },
   );
