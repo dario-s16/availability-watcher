@@ -322,7 +322,10 @@ async function showWatchlist(): Promise<void> {
   const watchlist = getWatchlist(source);
 
   if (watchlist.length === 0) {
-    await sendMainMenuMessage("The watchlist is empty.");
+    await sendMainMenuMessage(
+      "📚 You are not monitoring any books yet.\n\n" +
+        "Use ➕ Add book or send /watch to add one.",
+    );
 
     return;
   }
