@@ -3,7 +3,7 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
- * Updated: 2026-07-25
+ * Updated: 2026-07-26
  */
 
 import { mkdirSync } from "node:fs";
@@ -60,6 +60,11 @@ interface ProductRow {
   id: number;
 }
 
+interface ProductDetailsRow {
+  title: string | null;
+  authors: string | null;
+}
+
 interface WatchedProductRow {
   product_code: string;
 }
@@ -76,6 +81,11 @@ interface WatchlistItemRow {
   publisher: string | null;
   is_available: number | null;
   last_checked_at: string | null;
+}
+
+export interface ProductDetails {
+  title: string | undefined;
+  authors: string | undefined;
 }
 
 export interface WatchlistItem {
@@ -173,6 +183,34 @@ export function saveProductMetadata(
 }
 
 /**
+ * Returns the stored title and authors of one product.
+ */
+export function getProductDetails(
+  productCode: string,
+): ProductDetails | undefined {
+  const row = database
+    .prepare(
+      `
+        SELECT
+          title,
+          authors
+        FROM products
+        WHERE product_code = ?
+      `,
+    )
+    .get(productCode) as ProductDetailsRow | undefined;
+
+  if (row === undefined) {
+    return undefined;
+  }
+
+  return {
+    title: row.title ?? undefined,
+    authors: row.authors ?? undefined,
+  };
+}
+
+/**
  * Removes a watch.
  * The product remains in the registry for possible future use.
  */
@@ -198,9 +236,14 @@ export function removeProductFromWatchlist(
 }
 
 /**
- * Returns the product codes currently monitored for a source.
+ * Returns products that have never been checked or are due for a new check.
  */
-export function getWatchedProductCodes(source: string): string[] {
+export function getProductCodesDueForCheck(
+  source: string,
+  checkIntervalMinutes: number,
+): string[] {
+  const minimumAge = `-${checkIntervalMinutes} minutes`;
+
   const rows = database
     .prepare(
       `
@@ -209,10 +252,14 @@ export function getWatchedProductCodes(source: string): string[] {
         INNER JOIN products
           ON products.id = watches.product_id
         WHERE watches.source = ?
+          AND (
+            watches.last_checked_at IS NULL
+            OR watches.last_checked_at <= datetime('now', ?)
+          )
         ORDER BY watches.id
       `,
     )
-    .all(source) as WatchedProductRow[];
+    .all(source, minimumAge) as WatchedProductRow[];
 
   return rows.map((row) => row.product_code);
 }

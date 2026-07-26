@@ -3,6 +3,7 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-25
+ * Updated: 2026-07-26
  */
 
 import { setTimeout } from "node:timers/promises";
@@ -15,7 +16,14 @@ export interface BookMetadata {
   authors: string | undefined;
   editionYear: number | undefined;
   publisher: string | undefined;
-  source: "google-books" | "open-library" | "google-books+open-library";
+  source:
+    | "google-books"
+    | "open-library"
+    | "libraccio"
+    | "google-books+open-library"
+    | "google-books+libraccio"
+    | "open-library+libraccio"
+    | "google-books+open-library+libraccio";
 }
 
 interface GoogleVolumeInfo {
@@ -201,10 +209,59 @@ async function getOpenLibraryMetadata(
 }
 
 /**
- * Uses Google Books first and Open Library to provide missing information.
+ * Uses Libraccio only to complete fields still missing from the API result.
+ */
+function addLibraccioFallback(
+  apiMetadata: BookMetadata | undefined,
+  libraccioMetadata: BookMetadata | undefined,
+): BookMetadata | undefined {
+  if (apiMetadata === undefined) {
+    return libraccioMetadata;
+  }
+
+  if (libraccioMetadata === undefined) {
+    return apiMetadata;
+  }
+
+  const authors = apiMetadata.authors ?? libraccioMetadata.authors;
+  const editionYear = apiMetadata.editionYear ?? libraccioMetadata.editionYear;
+  const publisher = apiMetadata.publisher ?? libraccioMetadata.publisher;
+
+  const libraccioWasUsed =
+    authors !== apiMetadata.authors ||
+    editionYear !== apiMetadata.editionYear ||
+    publisher !== apiMetadata.publisher;
+
+  // Keeps the original source when Libraccio did not add any information.
+  if (!libraccioWasUsed) {
+    return apiMetadata;
+  }
+
+  let source: BookMetadata["source"] = apiMetadata.source;
+
+  if (apiMetadata.source === "google-books") {
+    source = "google-books+libraccio";
+  } else if (apiMetadata.source === "open-library") {
+    source = "open-library+libraccio";
+  } else if (apiMetadata.source === "google-books+open-library") {
+    source = "google-books+open-library+libraccio";
+  }
+
+  return {
+    title: apiMetadata.title,
+    authors,
+    editionYear,
+    publisher,
+    source,
+  };
+}
+
+/**
+ * Uses Google Books first, Open Library second, and Libraccio last.
  */
 export async function getBookMetadata(
   isbn13: string,
+  libraccioMetadata?: BookMetadata,
 ): Promise<BookMetadata | undefined> {
   let googleMetadata: BookMetadata | undefined;
 
@@ -221,7 +278,7 @@ export async function getBookMetadata(
     googleMetadata?.authors !== undefined &&
     googleMetadata.publisher !== undefined
   ) {
-    return googleMetadata;
+    return addLibraccioFallback(googleMetadata, libraccioMetadata);
   }
 
   let openLibraryMetadata: BookMetadata | undefined;
@@ -233,16 +290,15 @@ export async function getBookMetadata(
 
     console.error(`Open Library metadata lookup failed: ${reason}`);
 
-    // Partial Google data is still useful when the fallback fails.
-    return googleMetadata;
+    return addLibraccioFallback(googleMetadata, libraccioMetadata);
   }
 
   if (googleMetadata === undefined) {
-    return openLibraryMetadata;
+    return addLibraccioFallback(openLibraryMetadata, libraccioMetadata);
   }
 
   if (openLibraryMetadata === undefined) {
-    return googleMetadata;
+    return addLibraccioFallback(googleMetadata, libraccioMetadata);
   }
 
   const authors = googleMetadata.authors ?? openLibraryMetadata.authors;
@@ -253,14 +309,16 @@ export async function getBookMetadata(
     authors === googleMetadata.authors &&
     publisher === googleMetadata.publisher
   ) {
-    return googleMetadata;
+    return addLibraccioFallback(googleMetadata, libraccioMetadata);
   }
 
-  return {
+  const apiMetadata: BookMetadata = {
     title: googleMetadata.title,
     authors,
     editionYear: googleMetadata.editionYear,
     publisher,
     source: "google-books+open-library",
   };
+
+  return addLibraccioFallback(apiMetadata, libraccioMetadata);
 }

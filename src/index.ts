@@ -3,7 +3,7 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
- * Updated: 2026-07-25
+ * Updated: 2026-07-26
  */
 
 import { setTimeout } from "node:timers/promises";
@@ -11,7 +11,8 @@ import { getBookMetadata } from "./book-metadata.js";
 import {
   addProductToWatchlist,
   getPreviousAvailability,
-  getWatchedProductCodes,
+  getProductCodesDueForCheck,
+  getProductDetails,
   getWatchlist,
   removeProductFromWatchlist,
   saveAvailability,
@@ -19,7 +20,7 @@ import {
 } from "./database.js";
 import { validateAndConvertToIsbn13 } from "./isbn.js";
 import {
-  checkUsedBookAvailabilityOnLibraccio,
+  getLibraccioBookData,
   type LibraccioAvailability,
 } from "./libraccio.js";
 import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
@@ -60,16 +61,15 @@ if (
 }
 
 /**
- * Checks a monitored book and returns its current Libraccio status.
+ * Saves an availability result and sends a notification when needed.
  */
-async function checkWatchedBook(
+async function saveAvailabilityAndNotifyIfNeeded(
   isbn13: string,
-): Promise<LibraccioAvailability> {
-  const availability = await checkUsedBookAvailabilityOnLibraccio(isbn13);
-
+  availability: LibraccioAvailability,
+): Promise<void> {
   // A missing page is not an availability state to save.
   if (availability === "not-found") {
-    return availability;
+    return;
   }
 
   const isAvailable = availability === "available";
@@ -77,17 +77,22 @@ async function checkWatchedBook(
 
   // Notifies only when the book was not already available.
   if (isAvailable && previousAvailability !== true) {
+    const product = getProductDetails(isbn13);
+    const title = product?.title ?? "not available";
+    const authors = product?.authors ?? "not available";
     const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
 
     await sendTelegramMessage(
-      `Used copy available on Libraccio!\n` + `ISBN-13: ${isbn13}\n` + bookUrl,
+      `✅ Used copy available on Libraccio!\n\n` +
+        `Title: ${title}\n` +
+        `Authors: ${authors}\n` +
+        `ISBN: ${isbn13}\n\n` +
+        bookUrl,
     );
   }
 
-  // Stores the state only after the check and notification succeed.
+  // Stores the state only after the check and notification succeeds.
   saveAvailability(source, isbn13, isAvailable);
-
-  return availability;
 }
 
 /**
@@ -104,10 +109,10 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
 
   await sendTelegramMessage(`ISBN added: ${isbn13}\nChecking Libraccio...`);
 
-  let availability: LibraccioAvailability;
+  let libraccioBook;
 
   try {
-    availability = await checkWatchedBook(isbn13);
+    libraccioBook = await getLibraccioBookData(isbn13);
   } catch (error) {
     const reason = error instanceof Error ? `\n${error.message}` : "";
 
@@ -119,7 +124,7 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
     return;
   }
 
-  if (availability === "not-found") {
+  if (libraccioBook.availability === "not-found") {
     // Removes an ISBN that has no corresponding Libraccio page.
     removeProductFromWatchlist(source, isbn13);
 
@@ -130,22 +135,22 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
     return;
   }
 
-  if (availability === "unavailable") {
-    await sendTelegramMessage("No used copy currently available on Libraccio.");
-  }
-
-  // Metadata is optional and is requested only for a valid Libraccio page.
-  const metadata = await getBookMetadata(isbn13);
+  // APIs are preferred, while Libraccio completes any missing fields.
+  const metadata = await getBookMetadata(isbn13, libraccioBook.metadata);
 
   if (metadata === undefined) {
     console.log(`No metadata found for ${isbn13}.`);
+  } else {
+    saveProductMetadata(isbn13, metadata);
 
-    return;
+    console.log(`Metadata saved for ${isbn13} from ${metadata.source}.`);
   }
 
-  saveProductMetadata(isbn13, metadata);
+  await saveAvailabilityAndNotifyIfNeeded(isbn13, libraccioBook.availability);
 
-  console.log(`Metadata saved for ${isbn13} from ${metadata.source}.`);
+  if (libraccioBook.availability === "unavailable") {
+    await sendTelegramMessage("No used copy currently available on Libraccio.");
+  }
 }
 
 /**
@@ -224,10 +229,10 @@ async function showWatchlist(): Promise<void> {
 
     const availability =
       item.isAvailable === undefined
-        ? "unknown"
+        ? "❔ unknown"
         : item.isAvailable
-          ? "available"
-          : "not available";
+          ? "✅ available"
+          : "❌ not available";
 
     const statusUpdated =
       item.lastCheckedAt === undefined
@@ -359,24 +364,38 @@ async function runTelegramBot(): Promise<void> {
 }
 
 /**
- * Periodically checks every ISBN stored in the watchlist.
+ * Periodically checks books that are due for a new availability check.
  */
 async function runPeriodicChecks(): Promise<void> {
   while (true) {
-    const watchedProducts = getWatchedProductCodes(source);
+    const productsDueForCheck = getProductCodesDueForCheck(
+      source,
+      checkIntervalMinutes,
+    );
+
     let checkedBooks = 0;
 
-    console.log(`Checking ${watchedProducts.length} monitored book(s).`);
+    if (productsDueForCheck.length === 0) {
+      console.log("No monitored books currently need an availability check.");
+    } else {
+      console.log(`Checking ${productsDueForCheck.length} monitored book(s).`);
+    }
 
     // Checks one book at a time.
-    for (const isbn13 of watchedProducts) {
+    for (const isbn13 of productsDueForCheck) {
       try {
-        const availability = await checkWatchedBook(isbn13);
+        const libraccioBook = await getLibraccioBookData(isbn13);
+
+        await saveAvailabilityAndNotifyIfNeeded(
+          isbn13,
+          libraccioBook.availability,
+        );
+
         let result = "available";
 
-        if (availability === "unavailable") {
+        if (libraccioBook.availability === "unavailable") {
           result = "not available";
-        } else if (availability === "not-found") {
+        } else if (libraccioBook.availability === "not-found") {
           result = "page not found";
         }
 
@@ -390,14 +409,14 @@ async function runPeriodicChecks(): Promise<void> {
       checkedBooks += 1;
 
       // Pauses only when another Libraccio request still has to be made.
-      if (checkedBooks < watchedProducts.length) {
+      if (checkedBooks < productsDueForCheck.length) {
         await setTimeout(requestDelayMilliseconds);
       }
     }
 
     console.log(`Next automatic check in ${checkIntervalMinutes} minutes.`);
 
-    // Starts the interval only after all current checks have finished.
+    // Starts the interval only after the current checks have finished.
     await setTimeout(checkIntervalMilliseconds);
   }
 }
