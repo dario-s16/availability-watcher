@@ -26,6 +26,7 @@ export interface TelegramUpdate {
   message?: {
     chat: {
       id: number;
+      type: "private" | "group" | "supergroup" | "channel";
     };
     text?: string;
   };
@@ -79,18 +80,17 @@ export async function getTelegramUpdates(
 }
 
 /**
- * Sends a message with optional formatting and keyboard settings.
+ * Sends a message to one Telegram chat.
  */
 export async function sendTelegramMessage(
+  telegramChatId: number,
   message: string,
   options: TelegramMessageOptions = {},
 ): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
 
-  // Both values are required, but must remain outside the source code.
-  if (token === undefined || chatId === undefined) {
-    throw new Error("Telegram configuration is missing.");
+  if (token === undefined) {
+    throw new Error("Telegram bot token is missing.");
   }
 
   const linkPreviewOptions =
@@ -118,7 +118,7 @@ export async function sendTelegramMessage(
     };
   }
 
-  // Sends the chat ID, text, and optional settings to the Telegram Bot API.
+  // Sends the target Chat ID, text, and optional settings to Telegram.
   const response = await fetch(
     `https://api.telegram.org/bot${token}/sendMessage`,
     {
@@ -127,7 +127,7 @@ export async function sendTelegramMessage(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        chat_id: chatId,
+        chat_id: telegramChatId,
         text: message,
         parse_mode: options.parseMode,
         link_preview_options: linkPreviewOptions,

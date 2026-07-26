@@ -1,5 +1,5 @@
 /**
- * Stores and retrieves products, watches, and availability states using SQLite.
+ * Stores and retrieves users, products, watches, and availability states.
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
@@ -21,6 +21,12 @@ database.pragma("foreign_keys = ON");
 
 // Creates the required tables only when they do not already exist.
 database.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    telegram_chat_id INTEGER NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) STRICT;
+
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY,
     product_code TEXT NOT NULL UNIQUE,
@@ -31,11 +37,10 @@ database.exec(`
     metadata_source TEXT
   ) STRICT;
 
-  CREATE TABLE IF NOT EXISTS watches (
+  CREATE TABLE IF NOT EXISTS availability_status (
     id INTEGER PRIMARY KEY,
     source TEXT NOT NULL,
     product_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     is_available INTEGER,
     last_checked_at TEXT,
 
@@ -54,10 +59,34 @@ database.exec(`
       )
     )
   ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS watches (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    availability_status_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE (user_id, availability_status_id),
+
+    FOREIGN KEY (user_id)
+      REFERENCES users (id)
+      ON DELETE CASCADE,
+
+    FOREIGN KEY (availability_status_id)
+      REFERENCES availability_status (id)
+      ON DELETE CASCADE
+  ) STRICT;
+
+  CREATE INDEX IF NOT EXISTS watches_availability_status_id_index
+  ON watches (availability_status_id);
 `);
 
-interface ProductRow {
+interface IdRow {
   id: number;
+}
+
+interface CountRow {
+  total: number;
 }
 
 interface ProductDetailsRow {
@@ -73,6 +102,10 @@ interface AvailabilityRow {
   is_available: number | null;
 }
 
+interface TelegramChatIdRow {
+  telegram_chat_id: number;
+}
+
 interface WatchlistItemRow {
   product_code: string;
   title: string | null;
@@ -82,6 +115,8 @@ interface WatchlistItemRow {
   is_available: number | null;
   last_checked_at: string | null;
 }
+
+export type AddWatchResult = "added" | "already-watched" | "limit-reached";
 
 export interface ProductDetails {
   title: string | undefined;
@@ -99,13 +134,79 @@ export interface WatchlistItem {
 }
 
 /**
- * Adds a product to the registry and watchlist.
- * Returns false when the product is already being monitored.
+ * Registers a Telegram user if the Chat ID is not already stored.
+ */
+export function registerTelegramUser(telegramChatId: number): void {
+  database
+    .prepare(
+      `
+        INSERT INTO users (
+          telegram_chat_id
+        )
+        VALUES (?)
+        ON CONFLICT (telegram_chat_id) DO NOTHING
+      `,
+    )
+    .run(telegramChatId);
+}
+
+/**
+ * Adds a product to one user's watchlist.
  */
 export function addProductToWatchlist(
+  telegramChatId: number,
   source: string,
   productCode: string,
-): boolean {
+  maximumWatches: number,
+): AddWatchResult {
+  const user = database
+    .prepare(
+      `
+        SELECT id
+        FROM users
+        WHERE telegram_chat_id = ?
+      `,
+    )
+    .get(telegramChatId) as IdRow | undefined;
+
+  if (user === undefined) {
+    throw new Error("Cannot add a watch for an unknown user.");
+  }
+
+  const existingWatch = database
+    .prepare(
+      `
+        SELECT watches.id
+        FROM watches
+        INNER JOIN availability_status
+          ON availability_status.id = watches.availability_status_id
+        INNER JOIN products
+          ON products.id = availability_status.product_id
+        WHERE watches.user_id = ?
+          AND availability_status.source = ?
+          AND products.product_code = ?
+      `,
+    )
+    .get(user.id, source, productCode) as IdRow | undefined;
+
+  if (existingWatch !== undefined) {
+    return "already-watched";
+  }
+
+  const watchCount = database
+    .prepare(
+      `
+        SELECT COUNT(*) AS total
+        FROM watches
+        WHERE user_id = ?
+      `,
+    )
+    .get(user.id) as CountRow;
+
+  if (watchCount.total >= maximumWatches) {
+    return "limit-reached";
+  }
+
   database
     .prepare(
       `
@@ -126,16 +227,16 @@ export function addProductToWatchlist(
         WHERE product_code = ?
       `,
     )
-    .get(productCode) as ProductRow | undefined;
+    .get(productCode) as IdRow | undefined;
 
   if (product === undefined) {
     throw new Error("Unable to find the product after adding it.");
   }
 
-  const result = database
+  database
     .prepare(
       `
-        INSERT INTO watches (
+        INSERT INTO availability_status (
           source,
           product_id
         )
@@ -145,7 +246,38 @@ export function addProductToWatchlist(
     )
     .run(source, product.id);
 
-  return result.changes === 1;
+  const availabilityStatus = database
+    .prepare(
+      `
+        SELECT id
+        FROM availability_status
+        WHERE source = ?
+          AND product_id = ?
+      `,
+    )
+    .get(source, product.id) as IdRow | undefined;
+
+  if (availabilityStatus === undefined) {
+    throw new Error("Unable to create the availability status.");
+  }
+
+  const result = database
+    .prepare(
+      `
+        INSERT INTO watches (
+          user_id,
+          availability_status_id
+        )
+        VALUES (?, ?)
+      `,
+    )
+    .run(user.id, availabilityStatus.id);
+
+  if (result.changes !== 1) {
+    throw new Error("Unable to add the book to the watchlist.");
+  }
+
+  return "added";
 }
 
 /**
@@ -211,10 +343,10 @@ export function getProductDetails(
 }
 
 /**
- * Removes a watch.
- * The product remains in the registry for possible future use.
+ * Removes a product from one user's watchlist.
  */
 export function removeProductFromWatchlist(
+  telegramChatId: number,
   source: string,
   productCode: string,
 ): boolean {
@@ -222,21 +354,28 @@ export function removeProductFromWatchlist(
     .prepare(
       `
         DELETE FROM watches
-        WHERE source = ?
-          AND product_id = (
-            SELECT id
-            FROM products
-            WHERE product_code = ?
+        WHERE user_id = (
+          SELECT id
+          FROM users
+          WHERE telegram_chat_id = ?
+        )
+          AND availability_status_id = (
+            SELECT availability_status.id
+            FROM availability_status
+            INNER JOIN products
+              ON products.id = availability_status.product_id
+            WHERE availability_status.source = ?
+              AND products.product_code = ?
           )
       `,
     )
-    .run(source, productCode);
+    .run(telegramChatId, source, productCode);
 
   return result.changes === 1;
 }
 
 /**
- * Returns products that have never been checked or are due for a new check.
+ * Returns products that have watchers and are due for a new check.
  */
 export function getProductCodesDueForCheck(
   source: string,
@@ -248,15 +387,20 @@ export function getProductCodesDueForCheck(
     .prepare(
       `
         SELECT products.product_code
-        FROM watches
+        FROM availability_status
         INNER JOIN products
-          ON products.id = watches.product_id
-        WHERE watches.source = ?
+          ON products.id = availability_status.product_id
+        INNER JOIN watches
+          ON watches.availability_status_id = availability_status.id
+        WHERE availability_status.source = ?
           AND (
-            watches.last_checked_at IS NULL
-            OR watches.last_checked_at <= datetime('now', ?)
+            availability_status.last_checked_at IS NULL
+            OR availability_status.last_checked_at <= datetime('now', ?)
           )
-        ORDER BY watches.id
+        GROUP BY
+          availability_status.id,
+          products.product_code
+        ORDER BY availability_status.id
       `,
     )
     .all(source, minimumAge) as WatchedProductRow[];
@@ -265,9 +409,12 @@ export function getProductCodesDueForCheck(
 }
 
 /**
- * Returns monitored products with their metadata and availability state.
+ * Returns one user's monitored products and their availability states.
  */
-export function getWatchlist(source: string): WatchlistItem[] {
+export function getWatchlist(
+  telegramChatId: number,
+  source: string,
+): WatchlistItem[] {
   const rows = database
     .prepare(
       `
@@ -277,16 +424,21 @@ export function getWatchlist(source: string): WatchlistItem[] {
           products.authors,
           products.edition_year,
           products.publisher,
-          watches.is_available,
-          watches.last_checked_at
+          availability_status.is_available,
+          availability_status.last_checked_at
         FROM watches
+        INNER JOIN users
+          ON users.id = watches.user_id
+        INNER JOIN availability_status
+          ON availability_status.id = watches.availability_status_id
         INNER JOIN products
-          ON products.id = watches.product_id
-        WHERE watches.source = ?
+          ON products.id = availability_status.product_id
+        WHERE users.telegram_chat_id = ?
+          AND availability_status.source = ?
         ORDER BY watches.id
       `,
     )
-    .all(source) as WatchlistItemRow[];
+    .all(telegramChatId, source) as WatchlistItemRow[];
 
   return rows.map((row) => ({
     productCode: row.product_code,
@@ -300,7 +452,7 @@ export function getWatchlist(source: string): WatchlistItem[] {
 }
 
 /**
- * Returns the previous availability or undefined when no state is stored.
+ * Returns the previous global availability of one product.
  */
 export function getPreviousAvailability(
   source: string,
@@ -309,11 +461,11 @@ export function getPreviousAvailability(
   const row = database
     .prepare(
       `
-        SELECT watches.is_available
-        FROM watches
+        SELECT availability_status.is_available
+        FROM availability_status
         INNER JOIN products
-          ON products.id = watches.product_id
-        WHERE watches.source = ?
+          ON products.id = availability_status.product_id
+        WHERE availability_status.source = ?
           AND products.product_code = ?
       `,
     )
@@ -327,7 +479,35 @@ export function getPreviousAvailability(
 }
 
 /**
- * Updates the availability state of a monitored product.
+ * Returns the Chat IDs of all users monitoring one product.
+ */
+export function getTelegramChatIdsWatchingProduct(
+  source: string,
+  productCode: string,
+): number[] {
+  const rows = database
+    .prepare(
+      `
+        SELECT users.telegram_chat_id
+        FROM watches
+        INNER JOIN users
+          ON users.id = watches.user_id
+        INNER JOIN availability_status
+          ON availability_status.id = watches.availability_status_id
+        INNER JOIN products
+          ON products.id = availability_status.product_id
+        WHERE availability_status.source = ?
+          AND products.product_code = ?
+        ORDER BY watches.id
+      `,
+    )
+    .all(source, productCode) as TelegramChatIdRow[];
+
+  return rows.map((row) => row.telegram_chat_id);
+}
+
+/**
+ * Updates the global availability state of one product.
  */
 export function saveAvailability(
   source: string,
@@ -337,7 +517,7 @@ export function saveAvailability(
   const result = database
     .prepare(
       `
-        UPDATE watches
+        UPDATE availability_status
         SET
           is_available = ?,
           last_checked_at = CURRENT_TIMESTAMP
@@ -352,6 +532,6 @@ export function saveAvailability(
     .run(isAvailable ? 1 : 0, source, productCode);
 
   if (result.changes !== 1) {
-    throw new Error("Cannot save availability for an unmonitored product.");
+    throw new Error("Cannot save availability for an unknown product.");
   }
 }

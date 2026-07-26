@@ -13,7 +13,9 @@ import {
   getPreviousAvailability,
   getProductCodesDueForCheck,
   getProductDetails,
+  getTelegramChatIdsWatchingProduct,
   getWatchlist,
+  registerTelegramUser,
   removeProductFromWatchlist,
   saveAvailability,
   saveProductMetadata,
@@ -28,7 +30,8 @@ import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
 type PendingCommand = "/watch" | "/unwatch";
 
 const source = "libraccio";
-const allowedChatId = process.env.TELEGRAM_CHAT_ID;
+
+const maximumWatchesPerUser = 30;
 
 const checkIntervalMinutes = 30;
 const checkIntervalMilliseconds = checkIntervalMinutes * 60 * 1000;
@@ -69,23 +72,23 @@ const helpMessage =
   "/cancel - Cancel the current operation\n" +
   "/help - Show the available commands";
 
-// Remembers which command is waiting for an ISBN.
-// This temporary value resets when the application restarts.
-let pendingCommand: PendingCommand | undefined;
+// Stores one pending command for each Telegram chat.
+// These temporary values reset when the application restarts.
+const pendingCommands = new Map<number, PendingCommand>();
 
-// The bot token and authorized chat are required to start the application.
-if (
-  process.env.TELEGRAM_BOT_TOKEN === undefined ||
-  allowedChatId === undefined
-) {
-  throw new Error("Telegram configuration is missing.");
+// The bot token is required to start the application.
+if (process.env.TELEGRAM_BOT_TOKEN === undefined) {
+  throw new Error("Telegram bot token is missing.");
 }
 
 /**
  * Sends a message and shows the main Telegram keyboard.
  */
-async function sendMainMenuMessage(message: string): Promise<void> {
-  await sendTelegramMessage(message, {
+async function sendMainMenuMessage(
+  telegramChatId: number,
+  message: string,
+): Promise<void> {
+  await sendTelegramMessage(telegramChatId, message, {
     keyboard: mainKeyboard,
     persistentKeyboard: true,
   });
@@ -114,16 +117,22 @@ function getIsbnFromRemovalButton(buttonText: string): string {
 }
 
 /**
- * Shows one removal button for every monitored book.
+ * Shows one removal button for every book monitored by one user.
  */
 async function showRemoveBookKeyboard(
+  telegramChatId: number,
   message = "Choose the book you want to remove.",
 ): Promise<void> {
-  const watchlist = getWatchlist(source);
+  const watchlist = getWatchlist(telegramChatId, source);
 
   if (watchlist.length === 0) {
-    pendingCommand = undefined;
-    await sendMainMenuMessage("The watchlist is empty.");
+    pendingCommands.delete(telegramChatId);
+
+    await sendMainMenuMessage(
+      telegramChatId,
+      "📚 You are not monitoring any books yet.\n\n" +
+        "Use ➕ Add book or send /watch to add one.",
+    );
 
     return;
   }
@@ -137,21 +146,21 @@ async function showRemoveBookKeyboard(
     removeKeyboard.push([`${title} [${item.productCode}]`]);
   }
 
-  pendingCommand = "/unwatch";
+  pendingCommands.set(telegramChatId, "/unwatch");
 
-  await sendTelegramMessage(message, {
+  await sendTelegramMessage(telegramChatId, message, {
     keyboard: removeKeyboard,
     oneTimeKeyboard: true,
   });
 }
 
 /**
- * Saves an availability result and sends a notification when needed.
+ * Saves a global availability result and notifies interested users.
  */
 async function saveAvailabilityAndNotifyIfNeeded(
   isbn13: string,
   availability: LibraccioAvailability,
-  showMainKeyboard = false,
+  requestingChatId?: number,
 ): Promise<void> {
   // A missing page is not an availability state to save.
   if (availability === "not-found") {
@@ -161,45 +170,93 @@ async function saveAvailabilityAndNotifyIfNeeded(
   const isAvailable = availability === "available";
   const previousAvailability = getPreviousAvailability(source, isbn13);
 
-  // Notifies only when the book was not already available.
-  if (isAvailable && previousAvailability !== true) {
-    const product = getProductDetails(isbn13);
-    const title = product?.title ?? "not available";
-    const authors = product?.authors ?? "not available";
-    const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
+  if (isAvailable) {
+    let chatIdsToNotify: number[] = [];
 
-    await sendTelegramMessage(
-      `✅ Used copy available on Libraccio!\n\n` +
+    // A new transition to available interests every user watching the book.
+    if (previousAvailability !== true) {
+      chatIdsToNotify = getTelegramChatIdsWatchingProduct(source, isbn13);
+    } else if (requestingChatId !== undefined) {
+      // A new watcher must be informed even when the book was already available.
+      chatIdsToNotify = [requestingChatId];
+    }
+
+    if (chatIdsToNotify.length > 0) {
+      const product = getProductDetails(isbn13);
+      const title = product?.title ?? "not available";
+      const authors = product?.authors ?? "not available";
+      const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
+
+      const notification =
+        `✅ Used copy available on Libraccio!\n\n` +
         `Title: ${title}\n` +
         `Authors: ${authors}\n` +
         `ISBN: ${isbn13}\n\n` +
-        bookUrl,
-      showMainKeyboard
-        ? {
-            keyboard: mainKeyboard,
-            persistentKeyboard: true,
-          }
-        : undefined,
-    );
+        bookUrl;
+
+      for (const telegramChatId of chatIdsToNotify) {
+        try {
+          const options =
+            telegramChatId === requestingChatId
+              ? {
+                  keyboard: mainKeyboard,
+                  persistentKeyboard: true,
+                }
+              : undefined;
+
+          await sendTelegramMessage(telegramChatId, notification, options);
+        } catch (error) {
+          const reason = error instanceof Error ? `: ${error.message}` : "";
+
+          // One unreachable user must not block notifications to other users.
+          console.error(
+            `Unable to notify Telegram chat ${telegramChatId}${reason}`,
+          );
+        }
+      }
+    }
   }
 
-  // Stores the state only after the check and notification succeeds.
+  // The shared state is stored after all notification attempts.
   saveAvailability(source, isbn13, isAvailable);
 }
 
 /**
- * Adds a validated ISBN and performs its first availability check.
+ * Adds a validated ISBN to one user's watchlist.
  */
-async function addBookToWatchlist(isbn13: string): Promise<void> {
-  const wasAdded = addProductToWatchlist(source, isbn13);
+async function addBookToWatchlist(
+  telegramChatId: number,
+  isbn13: string,
+): Promise<void> {
+  const addResult = addProductToWatchlist(
+    telegramChatId,
+    source,
+    isbn13,
+    maximumWatchesPerUser,
+  );
 
-  if (!wasAdded) {
-    await sendMainMenuMessage(`ISBN already monitored: ${isbn13}`);
+  if (addResult === "already-watched") {
+    await sendMainMenuMessage(
+      telegramChatId,
+      `ISBN already monitored: ${isbn13}`,
+    );
 
     return;
   }
 
-  await sendTelegramMessage(`ISBN added: ${isbn13}\nChecking Libraccio...`);
+  if (addResult === "limit-reached") {
+    await sendMainMenuMessage(
+      telegramChatId,
+      `You can monitor up to ${maximumWatchesPerUser} books.`,
+    );
+
+    return;
+  }
+
+  await sendTelegramMessage(
+    telegramChatId,
+    `ISBN added: ${isbn13}\nChecking Libraccio...`,
+  );
 
   let libraccioBook;
 
@@ -209,6 +266,7 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
     const reason = error instanceof Error ? `\n${error.message}` : "";
 
     await sendMainMenuMessage(
+      telegramChatId,
       `The ISBN was added, but the first availability check ` +
         `could not be completed.${reason}`,
     );
@@ -217,10 +275,11 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
   }
 
   if (libraccioBook.availability === "not-found") {
-    // Removes an ISBN that has no corresponding Libraccio page.
-    removeProductFromWatchlist(source, isbn13);
+    // Removes only this user's watch when Libraccio has no corresponding page.
+    removeProductFromWatchlist(telegramChatId, source, isbn13);
 
     await sendMainMenuMessage(
+      telegramChatId,
       `ISBN removed: Libraccio has no page for ${isbn13}.`,
     );
 
@@ -241,47 +300,60 @@ async function addBookToWatchlist(isbn13: string): Promise<void> {
   await saveAvailabilityAndNotifyIfNeeded(
     isbn13,
     libraccioBook.availability,
-    true,
+    telegramChatId,
   );
 
   if (libraccioBook.availability === "unavailable") {
-    await sendMainMenuMessage("No used copy currently available on Libraccio.");
+    await sendMainMenuMessage(
+      telegramChatId,
+      "No used copy currently available on Libraccio.",
+    );
   }
 }
 
 /**
- * Removes a validated ISBN from the watchlist.
+ * Removes a validated ISBN from one user's watchlist.
  */
-async function removeBookFromWatchlist(isbn13: string): Promise<void> {
-  const wasRemoved = removeProductFromWatchlist(source, isbn13);
+async function removeBookFromWatchlist(
+  telegramChatId: number,
+  isbn13: string,
+): Promise<void> {
+  const wasRemoved = removeProductFromWatchlist(telegramChatId, source, isbn13);
 
   if (wasRemoved) {
-    await sendMainMenuMessage(`ISBN removed: ${isbn13}`);
+    await sendMainMenuMessage(telegramChatId, `ISBN removed: ${isbn13}`);
   } else {
-    await sendMainMenuMessage(`ISBN not found in the watchlist: ${isbn13}`);
+    await sendMainMenuMessage(
+      telegramChatId,
+      `ISBN not found in your watchlist: ${isbn13}`,
+    );
   }
 }
 
 /**
- * Validates an ISBN and executes the requested command.
+ * Validates an ISBN and executes one user's requested command.
  * Returns false when the ISBN is invalid.
  */
 async function processIsbnCommand(
+  telegramChatId: number,
   command: PendingCommand,
   isbnInput: string,
 ): Promise<boolean> {
   const isbn13 = validateAndConvertToIsbn13(isbnInput);
 
   if (isbn13 === undefined) {
-    await sendTelegramMessage("The provided ISBN is not valid.");
+    await sendTelegramMessage(
+      telegramChatId,
+      "The provided ISBN is not valid.",
+    );
 
     return false;
   }
 
   if (command === "/watch") {
-    await addBookToWatchlist(isbn13);
+    await addBookToWatchlist(telegramChatId, isbn13);
   } else {
-    await removeBookFromWatchlist(isbn13);
+    await removeBookFromWatchlist(telegramChatId, isbn13);
   }
 
   return true;
@@ -316,13 +388,14 @@ function escapeTelegramHtml(value: string): string {
 }
 
 /**
- * Sends one compact list with book links and latest used availability.
+ * Sends one user's compact watchlist.
  */
-async function showWatchlist(): Promise<void> {
-  const watchlist = getWatchlist(source);
+async function showWatchlist(telegramChatId: number): Promise<void> {
+  const watchlist = getWatchlist(telegramChatId, source);
 
   if (watchlist.length === 0) {
     await sendMainMenuMessage(
+      telegramChatId,
       "📚 You are not monitoring any books yet.\n\n" +
         "Use ➕ Add book or send /watch to add one.",
     );
@@ -384,7 +457,7 @@ async function showWatchlist(): Promise<void> {
     `❔ ${unknownCount} unknown\n\n` +
     books.join("\n\n");
 
-  await sendTelegramMessage(message, {
+  await sendTelegramMessage(telegramChatId, message, {
     parseMode: "HTML",
     disableLinkPreview: true,
     keyboard: mainKeyboard,
@@ -393,40 +466,52 @@ async function showWatchlist(): Promise<void> {
 }
 
 /**
- * Interprets one authorized Telegram text message.
+ * Interprets one text message from one Telegram chat.
  */
-async function handleTelegramMessage(text: string): Promise<void> {
+async function handleTelegramMessage(
+  telegramChatId: number,
+  text: string,
+): Promise<void> {
   const receivedText = text.trim();
 
   // Button labels are translated before the normal command logic runs.
   const messageText = buttonCommands[receivedText] ?? receivedText;
+  const pendingCommand = pendingCommands.get(telegramChatId);
 
   if (pendingCommand !== undefined) {
     if (messageText === "/cancel") {
-      pendingCommand = undefined;
-      await sendMainMenuMessage("Operation canceled.");
+      pendingCommands.delete(telegramChatId);
+
+      await sendMainMenuMessage(telegramChatId, "Operation canceled.");
 
       return;
     }
 
     if (!messageText.startsWith("/")) {
-      const currentCommand = pendingCommand;
-
       const isbnInput =
-        currentCommand === "/unwatch"
+        pendingCommand === "/unwatch"
           ? getIsbnFromRemovalButton(messageText)
           : messageText;
 
-      const wasIsbnValid = await processIsbnCommand(currentCommand, isbnInput);
+      const wasIsbnValid = await processIsbnCommand(
+        telegramChatId,
+        pendingCommand,
+        isbnInput,
+      );
 
       if (wasIsbnValid) {
-        pendingCommand = undefined;
-      } else if (currentCommand === "/watch") {
-        await sendTelegramMessage("Send another ISBN or use /cancel.", {
-          removeKeyboard: true,
-        });
+        pendingCommands.delete(telegramChatId);
+      } else if (pendingCommand === "/watch") {
+        await sendTelegramMessage(
+          telegramChatId,
+          "Send another ISBN or use /cancel.",
+          {
+            removeKeyboard: true,
+          },
+        );
       } else {
         await showRemoveBookKeyboard(
+          telegramChatId,
           "That selection is not valid. Choose a book or cancel.",
         );
       }
@@ -434,8 +519,8 @@ async function handleTelegramMessage(text: string): Promise<void> {
       return;
     }
 
-    // A new command interrupts the current operation.
-    pendingCommand = undefined;
+    // A new command interrupts only this user's current operation.
+    pendingCommands.delete(telegramChatId);
   }
 
   const commandParts = messageText.split(/\s+/);
@@ -445,32 +530,37 @@ async function handleTelegramMessage(text: string): Promise<void> {
   const isbnInput = commandParts.slice(1).join("");
 
   if (command === "/start" || command === "/help") {
-    await sendMainMenuMessage(helpMessage);
+    await sendMainMenuMessage(telegramChatId, helpMessage);
   } else if (command === "/watch") {
     if (isbnInput === "") {
-      pendingCommand = "/watch";
+      pendingCommands.set(telegramChatId, "/watch");
 
       await sendTelegramMessage(
+        telegramChatId,
         "Send me the ISBN of the book you want to monitor.\n\n/cancel",
         {
           removeKeyboard: true,
         },
       );
     } else {
-      await processIsbnCommand("/watch", isbnInput);
+      await processIsbnCommand(telegramChatId, "/watch", isbnInput);
     }
   } else if (command === "/unwatch") {
     if (isbnInput === "") {
-      await showRemoveBookKeyboard();
+      await showRemoveBookKeyboard(telegramChatId);
     } else {
-      await processIsbnCommand("/unwatch", isbnInput);
+      await processIsbnCommand(telegramChatId, "/unwatch", isbnInput);
     }
   } else if (command === "/list") {
-    await showWatchlist();
+    await showWatchlist(telegramChatId);
   } else if (command === "/cancel") {
-    await sendMainMenuMessage("There is no operation to cancel.");
+    await sendMainMenuMessage(
+      telegramChatId,
+      "There is no operation to cancel.",
+    );
   } else {
     await sendMainMenuMessage(
+      telegramChatId,
       "Unknown command. Send /help to see the available commands.",
     );
   }
@@ -489,18 +579,25 @@ async function runTelegramBot(): Promise<void> {
       for (const update of updates) {
         const message = update.message;
 
-        if (
-          message?.text !== undefined &&
-          String(message.chat.id) === allowedChatId
-        ) {
-          console.log(`Received Telegram message: ${message.text}`);
+        if (message?.text !== undefined && message.chat.type === "private") {
+          const telegramChatId = message.chat.id;
+
+          console.log(
+            `Received Telegram message from ${telegramChatId}: ${message.text}`,
+          );
 
           try {
-            await handleTelegramMessage(message.text);
+            // Receiving any private message is enough to register the user.
+            registerTelegramUser(telegramChatId);
+
+            await handleTelegramMessage(telegramChatId, message.text);
           } catch (error) {
             const reason = error instanceof Error ? `: ${error.message}` : "";
 
-            console.error(`Unable to handle Telegram message${reason}`);
+            console.error(
+              `Unable to handle Telegram message from ` +
+                `${telegramChatId}${reason}`,
+            );
           }
         }
 
@@ -537,7 +634,7 @@ async function runPeriodicChecks(): Promise<void> {
       console.log(`Checking ${productsDueForCheck.length} monitored book(s).`);
     }
 
-    // Checks one book at a time.
+    // Checks every ISBN once, regardless of how many users monitor it.
     for (const isbn13 of productsDueForCheck) {
       try {
         const libraccioBook = await getLibraccioBookData(isbn13);
