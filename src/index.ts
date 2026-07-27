@@ -50,8 +50,8 @@ const cancelButton = "✖ Cancel";
 
 // This keyboard provides the main actions on mobile.
 const mainKeyboard = [
-  [addBookButton, helpButton],
-  [listBooksButton, removeBookButton],
+  [listBooksButton, helpButton],
+  [addBookButton, removeBookButton],
 ];
 
 // Converts friendly button labels into the existing slash commands.
@@ -63,14 +63,25 @@ const buttonCommands: Record<string, string> = {
   [cancelButton]: "/cancel",
 };
 
+const startMessage =
+  "📚 Welcome to Availability Watcher!\n\n" +
+  "I monitor used-book availability on Libraccio and notify you when a " +
+  "monitored copy becomes available.\n\n" +
+  "Use the buttons below to add, view your watchlist, or remove books. " +
+  `Open ${helpButton} for more information.`;
+
 const helpMessage =
-  "Availability Watcher is ready.\n\n" +
-  "Available commands:\n" +
-  "/watch - Add a book\n" +
-  "/unwatch - Remove a book\n" +
-  "/list - Show monitored books\n" +
-  "/cancel - Cancel the current operation\n" +
-  "/help - Show the available commands";
+  "❓ How Availability Watcher works\n\n" +
+  `${addBookButton} or /watch\n` +
+  "Send an ISBN to add that edition to your watchlist.\n\n" +
+  `${listBooksButton} or /list\n` +
+  "View your books, their current used availability, and the latest " +
+  "successful check.\n\n" +
+  `${removeBookButton} or /unwatch\n` +
+  "Choose a book to stop monitoring it.\n\n" +
+  `${cancelButton} or /cancel\n` +
+  "Cancel the operation currently in progress.\n\n" +
+  `Used availability is checked automatically about every ${checkIntervalMinutes} minutes.`;
 
 // Stores one pending command for each Telegram chat.
 // These temporary values reset when the application restarts.
@@ -349,7 +360,15 @@ async function removeBookFromWatchlist(
   const wasRemoved = removeProductFromWatchlist(telegramChatId, source, isbn13);
 
   if (wasRemoved) {
-    await sendMainMenuMessage(telegramChatId, `ISBN removed: ${isbn13}`);
+    const product = getProductDetails(isbn13);
+    const title = product?.title ?? "Title not available";
+
+    await sendMainMenuMessage(
+      telegramChatId,
+      "🗑 Book removed from your watchlist.\n\n" +
+        `📖 ${title}\n` +
+        `ISBN: ${isbn13}`,
+    );
   } else {
     await sendMainMenuMessage(
       telegramChatId,
@@ -557,7 +576,9 @@ async function handleTelegramMessage(
   // Joins the remaining parts so ISBNs containing spaces are accepted.
   const isbnInput = commandParts.slice(1).join("");
 
-  if (command === "/start" || command === "/help") {
+  if (command === "/start") {
+    await sendMainMenuMessage(telegramChatId, startMessage);
+  } else if (command === "/help") {
     await sendMainMenuMessage(telegramChatId, helpMessage);
   } else if (command === "/watch") {
     if (isbnInput === "") {
