@@ -7,6 +7,7 @@
  */
 
 import type { BookMetadata } from "./book-metadata.js";
+import { validateAndConvertToIsbn13 } from "./isbn.js";
 
 const libraccioBookUrl = "https://www.libraccio.it/libro";
 const libraccioRequestTimeoutMilliseconds = 15000;
@@ -16,6 +17,49 @@ export type LibraccioAvailability = "available" | "unavailable" | "not-found";
 export interface LibraccioBookData {
   availability: LibraccioAvailability;
   metadata: BookMetadata | undefined;
+}
+
+/**
+ * Extracts and validates an ISBN from a Libraccio book URL.
+ */
+export function getIsbnFromLibraccioUrl(value: string): string | undefined {
+  let url: URL;
+
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+
+  const hasSupportedProtocol =
+    url.protocol === "https:" || url.protocol === "http:";
+
+  const hasLibraccioHost =
+    url.hostname === "libraccio.it" || url.hostname === "www.libraccio.it";
+
+  if (!hasSupportedProtocol || !hasLibraccioHost) {
+    return undefined;
+  }
+
+  const pathSegments = url.pathname
+    .split("/")
+    .filter((segment) => segment !== "");
+
+  const bookSegmentIndex = pathSegments.indexOf("libro");
+
+  if (bookSegmentIndex === -1) {
+    return undefined;
+  }
+
+  for (const segment of pathSegments.slice(bookSegmentIndex + 1)) {
+    const isbn13 = validateAndConvertToIsbn13(segment);
+
+    if (isbn13 !== undefined) {
+      return isbn13;
+    }
+  }
+
+  return undefined;
 }
 
 interface LibraccioJsonLd {

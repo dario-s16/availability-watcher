@@ -22,6 +22,7 @@ import {
 } from "./database.js";
 import { validateAndConvertToIsbn13 } from "./isbn.js";
 import {
+  getIsbnFromLibraccioUrl,
   getLibraccioBookData,
   type LibraccioAvailability,
 } from "./libraccio.js";
@@ -67,13 +68,15 @@ const startMessage =
   "📚 Welcome to Availability Watcher!\n\n" +
   "I monitor used-book availability on Libraccio and notify you when a " +
   "monitored copy becomes available.\n\n" +
-  "Use the buttons below to add, view your watchlist, or remove books. " +
+  "Use the buttons below to add a book by ISBN or Libraccio link, " +
+  "view your watchlist, or remove books. " +
   `Open ${helpButton} for more information.`;
 
 const helpMessage =
   "❓ How Availability Watcher works\n\n" +
   `${addBookButton} or /watch\n` +
-  "Send an ISBN to add that edition to your watchlist.\n\n" +
+  "Send an ISBN or Libraccio book link to add that edition to your " +
+  "watchlist.\n\n" +
   `${listBooksButton} or /list\n` +
   "View your books, their current used availability, and the latest " +
   "successful check.\n\n" +
@@ -378,20 +381,21 @@ async function removeBookFromWatchlist(
 }
 
 /**
- * Validates an ISBN and executes one user's requested command.
- * Returns false when the ISBN is invalid.
+ * Resolves an ISBN or Libraccio URL and executes one user's command.
+ * Returns false when the input does not contain a valid ISBN.
  */
 async function processIsbnCommand(
   telegramChatId: number,
   command: PendingCommand,
-  isbnInput: string,
+  input: string,
 ): Promise<boolean> {
-  const isbn13 = validateAndConvertToIsbn13(isbnInput);
+  const isbn13 =
+    validateAndConvertToIsbn13(input) ?? getIsbnFromLibraccioUrl(input);
 
   if (isbn13 === undefined) {
     await sendTelegramMessage(
       telegramChatId,
-      "The provided ISBN is not valid.",
+      "The provided ISBN or Libraccio link is not valid.",
     );
 
     return false;
@@ -449,6 +453,14 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
 
     return;
   }
+
+  // Shows books with an available used copy before all other books.
+  watchlist.sort((firstBook, secondBook) => {
+    const firstBookIsAvailable = firstBook.isAvailable === true ? 1 : 0;
+    const secondBookIsAvailable = secondBook.isAvailable === true ? 1 : 0;
+
+    return secondBookIsAvailable - firstBookIsAvailable;
+  });
 
   const availableCount = watchlist.filter(
     (item) => item.isAvailable === true,
@@ -551,7 +563,7 @@ async function handleTelegramMessage(
       } else if (pendingCommand === "/watch") {
         await sendTelegramMessage(
           telegramChatId,
-          "Send another ISBN or use /cancel.",
+          "Send another ISBN or Libraccio link, or use /cancel.",
           {
             removeKeyboard: true,
           },
@@ -586,7 +598,8 @@ async function handleTelegramMessage(
 
       await sendTelegramMessage(
         telegramChatId,
-        "Send me the ISBN of the book you want to monitor.\n\n/cancel",
+        "Send me the ISBN or Libraccio link of the book you want to monitor.\n\n" +
+          "/cancel",
         {
           removeKeyboard: true,
         },
