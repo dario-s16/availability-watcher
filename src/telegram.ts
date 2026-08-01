@@ -41,6 +41,10 @@ interface TelegramUpdatesResponse {
   description?: string;
 }
 
+const telegramLongPollingSeconds = 30;
+const telegramReceiveTimeoutMilliseconds = 40 * 1000;
+const telegramSendTimeoutMilliseconds = 15 * 1000;
+
 /**
  * Requests new messages from Telegram using long polling.
  */
@@ -59,12 +63,14 @@ export async function getTelegramUpdates(
   url.searchParams.set("offset", String(offset));
 
   // Allows Telegram to keep the request open while waiting for a message.
-  url.searchParams.set("timeout", "30");
+  url.searchParams.set("timeout", String(telegramLongPollingSeconds));
 
   // This application currently handles only normal messages.
   url.searchParams.set("allowed_updates", JSON.stringify(["message"]));
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(telegramReceiveTimeoutMilliseconds),
+  });
 
   if (!response.ok) {
     throw new Error(`Telegram returned HTTP status ${response.status}.`);
@@ -123,6 +129,7 @@ export async function sendTelegramMessage(
     `https://api.telegram.org/bot${token}/sendMessage`,
     {
       method: "POST",
+      signal: AbortSignal.timeout(telegramSendTimeoutMilliseconds),
       headers: {
         "Content-Type": "application/json",
       },
