@@ -35,6 +35,11 @@ import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
 
 type PendingCommand = "/watch" | "/unwatch";
 
+interface BookAddRateLimit {
+  attemptCount: number;
+  startedAt: number;
+}
+
 const source = "libraccio";
 
 const checkIntervalMinutes = 30;
@@ -45,6 +50,9 @@ const requestDelayMilliseconds = requestDelaySeconds * 1000;
 
 const telegramRetryDelaySeconds = 5;
 const telegramRetryDelayMilliseconds = telegramRetryDelaySeconds * 1000;
+
+const maximumBookAddAttempts = 10;
+const bookAddRateLimitWindowMilliseconds = 60 * 1000;
 
 const addBookButton = "➕ Aggiungi libro";
 const listBooksButton = "📚 Libri monitorati";
@@ -93,6 +101,37 @@ const helpMessage =
 // Stores one pending command for each Telegram chat.
 // These temporary values reset when the application restarts.
 const pendingCommands = new Map<number, PendingCommand>();
+
+// Stores the current book-add rate limit for each Telegram chat.
+const bookAddRateLimits = new Map<number, BookAddRateLimit>();
+
+/**
+ * Registers a valid book-add attempt and returns whether it is allowed.
+ */
+function registerBookAddAttempt(telegramChatId: number): boolean {
+  const now = Date.now();
+  const currentLimit = bookAddRateLimits.get(telegramChatId);
+
+  if (
+    currentLimit === undefined ||
+    now - currentLimit.startedAt >= bookAddRateLimitWindowMilliseconds
+  ) {
+    bookAddRateLimits.set(telegramChatId, {
+      attemptCount: 1,
+      startedAt: now,
+    });
+
+    return true;
+  }
+
+  if (currentLimit.attemptCount >= maximumBookAddAttempts) {
+    return false;
+  }
+
+  currentLimit.attemptCount += 1;
+
+  return true;
+}
 
 // The bot token is required to start the application.
 if (process.env.TELEGRAM_BOT_TOKEN === undefined) {
@@ -428,6 +467,18 @@ async function processIsbnCommand(
   }
 
   if (command === "/watch") {
+    const isAttemptAllowed = registerBookAddAttempt(telegramChatId);
+
+    if (!isAttemptAllowed) {
+      await sendMainMenuMessage(
+        telegramChatId,
+        "Hai effettuato troppi tentativi di aggiunta in poco tempo. " +
+          "Riprova tra qualche secondo.",
+      );
+
+      return true;
+    }
+
     await addBookToWatchlist(telegramChatId, isbn13);
   } else {
     await removeBookFromWatchlist(telegramChatId, isbn13);
