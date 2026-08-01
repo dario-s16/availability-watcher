@@ -46,11 +46,11 @@ const requestDelayMilliseconds = requestDelaySeconds * 1000;
 const telegramRetryDelaySeconds = 5;
 const telegramRetryDelayMilliseconds = telegramRetryDelaySeconds * 1000;
 
-const addBookButton = "➕ Add book";
-const listBooksButton = "📚 Monitored books";
-const removeBookButton = "🗑 Remove book";
-const helpButton = "❓ Help";
-const cancelButton = "✖ Cancel";
+const addBookButton = "➕ Aggiungi libro";
+const listBooksButton = "📚 Libri monitorati";
+const removeBookButton = "🗑 Rimuovi libro";
+const helpButton = "❓ Aiuto";
+const cancelButton = "✖ Annulla";
 
 // This keyboard provides the main actions on mobile.
 const mainKeyboard = [
@@ -68,26 +68,27 @@ const buttonCommands: Record<string, string> = {
 };
 
 const startMessage =
-  "📚 Welcome to Availability Watcher!\n\n" +
-  "I monitor used-book availability on Libraccio and notify you when a " +
-  "monitored copy becomes available.\n\n" +
-  "Use the buttons below to add a book by ISBN or Libraccio link, " +
-  "view your watchlist, or remove books. " +
-  `Open ${helpButton} for more information.`;
+  "📚 Benvenuto in Monitor Usato Libraccio!\n\n" +
+  "Controllo la disponibilità dei libri usati su Libraccio e ti avviso " +
+  "quando una copia diventa disponibile.\n\n" +
+  "Usa i pulsanti qui sotto per aggiungere un libro tramite ISBN o link " +
+  "Libraccio, visualizzare la tua lista o rimuovere un libro. " +
+  `Apri ${helpButton} per maggiori informazioni.`;
 
 const helpMessage =
-  "❓ How Availability Watcher works\n\n" +
-  `${addBookButton} or /watch\n` +
-  "Send an ISBN or Libraccio book link to add that edition to your " +
-  "watchlist.\n\n" +
-  `${listBooksButton} or /list\n` +
-  "View your books, their current used availability, and the latest " +
-  "successful check.\n\n" +
-  `${removeBookButton} or /unwatch\n` +
-  "Choose a book to stop monitoring it.\n\n" +
-  `${cancelButton} or /cancel\n` +
-  "Cancel the operation currently in progress.\n\n" +
-  `Used availability is checked automatically about every ${checkIntervalMinutes} minutes.`;
+  "❓ Comandi\n\n" +
+  `• ${addBookButton} o /watch — aggiungi un libro tramite ISBN o link Libraccio\n` +
+  `• ${listBooksButton} o /list — mostra i libri monitorati\n` +
+  `• ${removeBookButton} o /unwatch — rimuovi un libro\n` +
+  `• ${cancelButton} o /cancel — annulla l'operazione corrente\n\n` +
+  `La disponibilità dell'usato viene controllata circa ogni ` +
+  `${checkIntervalMinutes} minuti.\n\n` +
+  "🔒 Privacy\n" +
+  "Il bot conserva il tuo Chat ID e gli ISBN monitorati soltanto per " +
+  "fornire il servizio. La tua lista non è visibile agli altri utenti.\n\n" +
+  "Per assistenza o per richiedere la cancellazione dei dati: " +
+  "monitorusatolibraccio@outlook.com\n\n" +
+  "Bot indipendente e non ufficiale.";
 
 // Stores one pending command for each Telegram chat.
 // These temporary values reset when the application restarts.
@@ -138,7 +139,7 @@ function getIsbnFromRemovalButton(buttonText: string): string {
  */
 async function showRemoveBookKeyboard(
   telegramChatId: number,
-  message = "Choose the book you want to remove.",
+  message = "Scegli il libro che vuoi rimuovere.",
 ): Promise<void> {
   const watchlist = getWatchlist(telegramChatId, source);
 
@@ -147,8 +148,8 @@ async function showRemoveBookKeyboard(
 
     await sendMainMenuMessage(
       telegramChatId,
-      "📚 You are not monitoring any books yet.\n\n" +
-        "Use ➕ Add book or send /watch to add one.",
+      "📚 Non stai ancora monitorando nessun libro.\n\n" +
+        "Usa ➕ Aggiungi libro oppure /watch per aggiungerne uno.",
     );
 
     return;
@@ -158,7 +159,7 @@ async function showRemoveBookKeyboard(
   const removeKeyboard = [[cancelButton]];
 
   for (const item of watchlist) {
-    const title = shortenBookTitle(item.title ?? "Title not available");
+    const title = shortenBookTitle(item.title ?? "Titolo non disponibile");
 
     removeKeyboard.push([`${title} [${item.productCode}]`]);
   }
@@ -197,14 +198,14 @@ async function saveAvailabilityAndNotifyIfNeeded(
 
     if (chatIdsToNotify.length > 0) {
       const product = getProductDetails(isbn13);
-      const title = product?.title ?? "not available";
-      const authors = product?.authors ?? "not available";
+      const title = product?.title ?? "non disponibile";
+      const authors = product?.authors ?? "non disponibili";
       const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
 
       const notification =
-        `✅ Used copy available on Libraccio!\n\n` +
-        `Title: ${title}\n` +
-        `Authors: ${authors}\n` +
+        `✅ Copia usata disponibile su Libraccio!\n\n` +
+        `Titolo: ${title}\n` +
+        `Autori: ${authors}\n` +
         `ISBN: ${isbn13}\n\n` +
         bookUrl;
 
@@ -236,27 +237,25 @@ async function sendBookAddedConfirmation(
   isAvailable: boolean,
 ): Promise<void> {
   const product = getProductDetails(isbn13);
-  const title = product?.title ?? "Title not available";
+  const title = product?.title ?? "Titolo non disponibile";
   const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
 
-  const lines = ["✅ Book added to your watchlist.", "", `📖 ${title}`];
+  const lines = ["✅ Libro aggiunto alla tua lista.", "", `📖 ${title}`];
 
   if (product?.authors !== undefined) {
-    lines.push(`Authors: ${product.authors}`);
+    lines.push(`Autori: ${product.authors}`);
   }
 
   lines.push(
     `ISBN: ${isbn13}`,
-    `Used copy: ${
-      isAvailable ? "✅ available now" : "❌ not currently available"
-    }`,
+    `Copia usata: ${isAvailable ? "✅ disponibile ora" : "❌ non disponibile"}`,
     "",
   );
 
   if (isAvailable) {
-    lines.push("🔔 I will keep monitoring this book.");
+    lines.push("🔔 Continuerò a monitorare questo libro.");
   } else {
-    lines.push("🔔 I will notify you when a used copy becomes available.");
+    lines.push("🔔 Ti avviserò quando una copia usata sarà disponibile.");
   }
 
   lines.push("", bookUrl);
@@ -280,7 +279,7 @@ async function addBookToWatchlist(
   if (addResult === "already-watched") {
     await sendMainMenuMessage(
       telegramChatId,
-      `ISBN already monitored: ${isbn13}`,
+      `Questo ISBN è già nella tua lista: ${isbn13}`,
     );
 
     return;
@@ -289,7 +288,7 @@ async function addBookToWatchlist(
   if (addResult === "watch-limit-reached") {
     await sendMainMenuMessage(
       telegramChatId,
-      `You can monitor up to ${maximumWatchesPerUser} books.`,
+      `Puoi monitorare al massimo ${maximumWatchesPerUser} libri.`,
     );
 
     return;
@@ -298,8 +297,9 @@ async function addBookToWatchlist(
   if (addResult === "user-limit-reached") {
     await sendMainMenuMessage(
       telegramChatId,
-      "Availability Watcher is not accepting new monitoring users " +
-        `right now. The current limit is ${maximumActiveUsers} active users.`,
+      "Il servizio ha raggiunto il limite di " +
+        `${maximumActiveUsers} utenti attivi e al momento non può accettare ` +
+        "nuovi utenti.",
     );
 
     return;
@@ -308,8 +308,8 @@ async function addBookToWatchlist(
   if (addResult === "book-limit-reached") {
     await sendMainMenuMessage(
       telegramChatId,
-      "Availability Watcher is currently monitoring its maximum of " +
-        `${maximumUniqueBooks} different books. Please try again later.`,
+      "Il servizio sta già monitorando il numero massimo di " +
+        `${maximumUniqueBooks} libri diversi. Riprova più tardi.`,
     );
 
     return;
@@ -317,7 +317,7 @@ async function addBookToWatchlist(
 
   await sendTelegramMessage(
     telegramChatId,
-    `🔄 Checking ISBN ${isbn13} on Libraccio...`,
+    `🔄 Controllo l'ISBN ${isbn13} su Libraccio...`,
   );
 
   let libraccioBook;
@@ -325,14 +325,18 @@ async function addBookToWatchlist(
   try {
     libraccioBook = await getLibraccioBookData(isbn13);
   } catch (error) {
-    const reason = error instanceof Error ? `\nReason: ${error.message}` : "";
+    const reason = error instanceof Error ? `: ${error.message}` : "";
+
+    console.error(
+      `Unable to complete the first Libraccio check for ${isbn13}${reason}`,
+    );
 
     await sendMainMenuMessage(
       telegramChatId,
-      `⚠️ Book saved, but the first Libraccio check ` +
-        `could not be completed.\n\n` +
-        `ISBN: ${isbn13}${reason}\n\n` +
-        `The automatic checks will try again.`,
+      "⚠️ Il libro è stato salvato, ma non è stato possibile completare " +
+        "il primo controllo su Libraccio.\n\n" +
+        `ISBN: ${isbn13}\n\n` +
+        "I controlli automatici riproveranno.",
     );
 
     return;
@@ -344,8 +348,8 @@ async function addBookToWatchlist(
 
     await sendMainMenuMessage(
       telegramChatId,
-      `⚠️ Libraccio has no page for ISBN ${isbn13}.\n\n` +
-        `The book was not added to your watchlist.`,
+      `⚠️ Libraccio non ha una pagina per l'ISBN ${isbn13}.\n\n` +
+        "Il libro non è stato aggiunto alla tua lista.",
     );
 
     return;
@@ -386,18 +390,18 @@ async function removeBookFromWatchlist(
 
   if (wasRemoved) {
     const product = getProductDetails(isbn13);
-    const title = product?.title ?? "Title not available";
+    const title = product?.title ?? "Titolo non disponibile";
 
     await sendMainMenuMessage(
       telegramChatId,
-      "🗑 Book removed from your watchlist.\n\n" +
+      "🗑 Libro rimosso dalla tua lista.\n\n" +
         `📖 ${title}\n` +
         `ISBN: ${isbn13}`,
     );
   } else {
     await sendMainMenuMessage(
       telegramChatId,
-      `ISBN not found in your watchlist: ${isbn13}`,
+      `ISBN non presente nella tua lista: ${isbn13}`,
     );
   }
 }
@@ -417,7 +421,7 @@ async function processIsbnCommand(
   if (isbn13 === undefined) {
     await sendTelegramMessage(
       telegramChatId,
-      "The provided ISBN or Libraccio link is not valid.",
+      "L'ISBN o il link Libraccio fornito non è valido.",
     );
 
     return false;
@@ -469,8 +473,8 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
   if (watchlist.length === 0) {
     await sendMainMenuMessage(
       telegramChatId,
-      "📚 You are not monitoring any books yet.\n\n" +
-        "Use ➕ Add book or send /watch to add one.",
+      "📚 Non stai ancora monitorando nessun libro.\n\n" +
+        "Usa ➕ Aggiungi libro oppure /watch per aggiungerne uno.",
     );
 
     return;
@@ -497,7 +501,7 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
   ).length;
 
   const books = watchlist.map((item) => {
-    const title = escapeTelegramHtml(item.title ?? "Title not available");
+    const title = escapeTelegramHtml(item.title ?? "Titolo non disponibile");
 
     const authors =
       item.authors === undefined ? undefined : escapeTelegramHtml(item.authors);
@@ -511,7 +515,7 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
     const lines = [`${availabilityIcon} <a href="${bookUrl}">${title}</a>`];
 
     if (authors !== undefined) {
-      lines.push(`Authors: ${authors}`);
+      lines.push(`Autori: ${authors}`);
     }
 
     if (item.editionYear !== undefined) {
@@ -521,10 +525,10 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
     }
 
     if (item.lastCheckedAt === undefined) {
-      lines.push("Used-copy check: never completed");
+      lines.push("Ultimo controllo: mai completato");
     } else {
       lines.push(
-        `Used-copy check: ${formatUtcDateForItaly(item.lastCheckedAt)}`,
+        `Ultimo controllo: ${formatUtcDateForItaly(item.lastCheckedAt)}`,
       );
     }
 
@@ -532,10 +536,10 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
   });
 
   const message =
-    `📚 Monitored books: ${watchlist.length}\n` +
-    `Used copies: ✅ ${availableCount} available · ` +
-    `❌ ${unavailableCount} unavailable · ` +
-    `❔ ${unknownCount} unknown\n\n` +
+    `📚 Libri monitorati: ${watchlist.length}\n` +
+    `Copie usate: ✅ ${availableCount} disponibili · ` +
+    `❌ ${unavailableCount} non disponibili · ` +
+    `❔ ${unknownCount} sconosciute\n\n` +
     books.join("\n\n");
 
   await sendTelegramMessage(telegramChatId, message, {
@@ -563,7 +567,7 @@ async function handleTelegramMessage(
     if (messageText === "/cancel") {
       pendingCommands.delete(telegramChatId);
 
-      await sendMainMenuMessage(telegramChatId, "Operation canceled.");
+      await sendMainMenuMessage(telegramChatId, "Operazione annullata.");
 
       return;
     }
@@ -585,7 +589,7 @@ async function handleTelegramMessage(
       } else if (pendingCommand === "/watch") {
         await sendTelegramMessage(
           telegramChatId,
-          "Send another ISBN or Libraccio link, or use /cancel.",
+          "Invia un altro ISBN o link Libraccio, oppure usa /cancel.",
           {
             removeKeyboard: true,
           },
@@ -593,7 +597,7 @@ async function handleTelegramMessage(
       } else {
         await showRemoveBookKeyboard(
           telegramChatId,
-          "That selection is not valid. Choose a book or cancel.",
+          "Scelta non valida. Scegli un libro oppure annulla.",
         );
       }
 
@@ -620,8 +624,8 @@ async function handleTelegramMessage(
 
       await sendTelegramMessage(
         telegramChatId,
-        "Send me the ISBN or Libraccio link of the book you want to monitor.\n\n" +
-          "/cancel",
+        "Inviami l'ISBN o il link Libraccio del libro che vuoi " +
+          "monitorare.\n\n/cancel",
         {
           removeKeyboard: true,
         },
@@ -640,12 +644,12 @@ async function handleTelegramMessage(
   } else if (command === "/cancel") {
     await sendMainMenuMessage(
       telegramChatId,
-      "There is no operation to cancel.",
+      "Non c'è nessuna operazione da annullare.",
     );
   } else {
     await sendMainMenuMessage(
       telegramChatId,
-      "Unknown command. Send /help to see the available commands.",
+      "Comando non riconosciuto. Invia /help per vedere i comandi disponibili.",
     );
   }
 }
