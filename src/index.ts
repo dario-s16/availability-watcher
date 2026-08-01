@@ -9,6 +9,11 @@
 import { setTimeout } from "node:timers/promises";
 import { getBookMetadata } from "./book-metadata.js";
 import {
+  maximumActiveUsers,
+  maximumUniqueBooks,
+  maximumWatchesPerUser,
+} from "./config.js";
+import {
   addProductToWatchlist,
   getPreviousAvailability,
   getProductCodesDueForCheck,
@@ -31,8 +36,6 @@ import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
 type PendingCommand = "/watch" | "/unwatch";
 
 const source = "libraccio";
-
-const maximumWatchesPerUser = 30;
 
 const checkIntervalMinutes = 30;
 const checkIntervalMilliseconds = checkIntervalMinutes * 60 * 1000;
@@ -268,12 +271,11 @@ async function addBookToWatchlist(
   telegramChatId: number,
   isbn13: string,
 ): Promise<void> {
-  const addResult = addProductToWatchlist(
-    telegramChatId,
-    source,
-    isbn13,
+  const addResult = addProductToWatchlist(telegramChatId, source, isbn13, {
+    maximumActiveUsers,
     maximumWatchesPerUser,
-  );
+    maximumUniqueBooks,
+  });
 
   if (addResult === "already-watched") {
     await sendMainMenuMessage(
@@ -284,10 +286,30 @@ async function addBookToWatchlist(
     return;
   }
 
-  if (addResult === "limit-reached") {
+  if (addResult === "watch-limit-reached") {
     await sendMainMenuMessage(
       telegramChatId,
       `You can monitor up to ${maximumWatchesPerUser} books.`,
+    );
+
+    return;
+  }
+
+  if (addResult === "user-limit-reached") {
+    await sendMainMenuMessage(
+      telegramChatId,
+      "Availability Watcher is not accepting new monitoring users " +
+        `right now. The current limit is ${maximumActiveUsers} active users.`,
+    );
+
+    return;
+  }
+
+  if (addResult === "book-limit-reached") {
+    await sendMainMenuMessage(
+      telegramChatId,
+      "Availability Watcher is currently monitoring its maximum of " +
+        `${maximumUniqueBooks} different books. Please try again later.`,
     );
 
     return;

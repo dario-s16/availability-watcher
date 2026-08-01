@@ -116,7 +116,18 @@ interface WatchlistItemRow {
   last_checked_at: string | null;
 }
 
-export type AddWatchResult = "added" | "already-watched" | "limit-reached";
+export type AddWatchResult =
+  | "added"
+  | "already-watched"
+  | "watch-limit-reached"
+  | "user-limit-reached"
+  | "book-limit-reached";
+
+export interface AddWatchLimits {
+  maximumActiveUsers: number;
+  maximumWatchesPerUser: number;
+  maximumUniqueBooks: number;
+}
 
 export interface ProductDetails {
   title: string | undefined;
@@ -151,13 +162,13 @@ export function registerTelegramUser(telegramChatId: number): void {
 }
 
 /**
- * Adds a product to one user's watchlist.
+ * Adds a product to one user's watchlist while enforcing the configured limits.
  */
 export function addProductToWatchlist(
   telegramChatId: number,
   source: string,
   productCode: string,
-  maximumWatches: number,
+  limits: AddWatchLimits,
 ): AddWatchResult {
   const user = database
     .prepare(
@@ -193,7 +204,7 @@ export function addProductToWatchlist(
     return "already-watched";
   }
 
-  const watchCount = database
+  const userWatchCount = database
     .prepare(
       `
         SELECT COUNT(*) AS total
@@ -203,8 +214,57 @@ export function addProductToWatchlist(
     )
     .get(user.id) as CountRow;
 
-  if (watchCount.total >= maximumWatches) {
-    return "limit-reached";
+  if (userWatchCount.total >= limits.maximumWatchesPerUser) {
+    return "watch-limit-reached";
+  }
+
+  if (userWatchCount.total === 0) {
+    const activeUserCount = database
+      .prepare(
+        `
+          SELECT COUNT(DISTINCT user_id) AS total
+          FROM watches
+        `,
+      )
+      .get() as CountRow;
+
+    if (activeUserCount.total >= limits.maximumActiveUsers) {
+      return "user-limit-reached";
+    }
+  }
+
+  const existingGlobalWatch = database
+    .prepare(
+      `
+        SELECT watches.id
+        FROM watches
+        INNER JOIN availability_status
+          ON availability_status.id = watches.availability_status_id
+        INNER JOIN products
+          ON products.id = availability_status.product_id
+        WHERE availability_status.source = ?
+          AND products.product_code = ?
+        LIMIT 1
+      `,
+    )
+    .get(source, productCode) as IdRow | undefined;
+
+  if (existingGlobalWatch === undefined) {
+    const uniqueBookCount = database
+      .prepare(
+        `
+          SELECT COUNT(DISTINCT availability_status.id) AS total
+          FROM watches
+          INNER JOIN availability_status
+            ON availability_status.id = watches.availability_status_id
+          WHERE availability_status.source = ?
+        `,
+      )
+      .get(source) as CountRow;
+
+    if (uniqueBookCount.total >= limits.maximumUniqueBooks) {
+      return "book-limit-reached";
+    }
   }
 
   database
