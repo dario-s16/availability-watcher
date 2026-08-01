@@ -15,6 +15,7 @@ import {
 } from "./config.js";
 import {
   addProductToWatchlist,
+  createDatabaseBackup,
   getPreviousAvailability,
   getProductCodesDueForCheck,
   getProductDetails,
@@ -53,6 +54,11 @@ const telegramRetryDelayMilliseconds = telegramRetryDelaySeconds * 1000;
 
 const maximumBookAddAttempts = 10;
 const bookAddRateLimitWindowMilliseconds = 60 * 1000;
+
+const databaseBackupIntervalHours = 24;
+const databaseBackupIntervalMilliseconds =
+  databaseBackupIntervalHours * 60 * 60 * 1000;
+const maximumDatabaseBackups = 30;
 
 const addBookButton = "➕ Aggiungi libro";
 const listBooksButton = "📚 Libri monitorati";
@@ -824,7 +830,30 @@ async function runPeriodicChecks(): Promise<void> {
   }
 }
 
+/**
+ * Creates and retains periodic database backups.
+ */
+async function runDatabaseBackups(): Promise<void> {
+  while (true) {
+    try {
+      const backupPath = await createDatabaseBackup(maximumDatabaseBackups);
+
+      console.log(`Database backup created: ${backupPath}`);
+    } catch (error) {
+      const reason = error instanceof Error ? `: ${error.message}` : "";
+
+      console.error(`Unable to create database backup${reason}`);
+    }
+
+    await setTimeout(databaseBackupIntervalMilliseconds);
+  }
+}
+
 console.log("Availability Watcher is running.");
 
-// Keeps the Telegram bot and automatic checks running together.
-await Promise.all([runTelegramBot(), runPeriodicChecks()]);
+// Keeps Telegram, availability checks, and database backups running together.
+await Promise.all([
+  runTelegramBot(),
+  runPeriodicChecks(),
+  runDatabaseBackups(),
+]);

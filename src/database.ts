@@ -6,15 +6,20 @@
  * Updated: 2026-07-26
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import type { BookMetadata } from "./book-metadata.js";
 
+const dataDirectory = "data";
+const backupDirectory = join(dataDirectory, "backups");
+const databasePath = join(dataDirectory, "availability-watcher.db");
+
 // Creates the data directory if it does not already exist.
-mkdirSync("data", { recursive: true });
+mkdirSync(dataDirectory, { recursive: true });
 
 // Opens the database file or creates it on the first execution.
-const database = new Database("data/availability-watcher.db");
+const database = new Database(databasePath);
 
 // Enables relationships between SQLite tables for this connection.
 database.pragma("foreign_keys = ON");
@@ -594,4 +599,35 @@ export function saveAvailability(
   if (result.changes !== 1) {
     throw new Error("Cannot save availability for an unknown product.");
   }
+}
+
+/**
+ * Creates a consistent database backup and keeps only the newest copies.
+ */
+export async function createDatabaseBackup(
+  maximumBackups: number,
+): Promise<string> {
+  mkdirSync(backupDirectory, { recursive: true });
+
+  const timestamp = new Date().toISOString().replaceAll(":", "-");
+  const backupFileName = `availability-watcher-${timestamp}.db`;
+  const backupPath = join(backupDirectory, backupFileName);
+
+  await database.backup(backupPath);
+
+  const backupFiles = readdirSync(backupDirectory)
+    .filter(
+      (fileName) =>
+        fileName.startsWith("availability-watcher-") &&
+        fileName.endsWith(".db"),
+    )
+    .sort();
+
+  const outdatedBackupCount = Math.max(0, backupFiles.length - maximumBackups);
+
+  for (const fileName of backupFiles.slice(0, outdatedBackupCount)) {
+    unlinkSync(join(backupDirectory, fileName));
+  }
+
+  return backupPath;
 }
