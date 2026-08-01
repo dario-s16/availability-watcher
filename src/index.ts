@@ -30,7 +30,9 @@ import { validateAndConvertToIsbn13 } from "./isbn.js";
 import {
   getIsbnFromLibraccioUrl,
   getLibraccioBookData,
+  searchLibraccioBooks,
   type LibraccioBookData,
+  type LibraccioBookSearchResult,
 } from "./libraccio.js";
 import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
 
@@ -88,13 +90,13 @@ const startMessage =
   "📚 Benvenuto in Monitor Usato Libraccio!\n\n" +
   "Controllo la disponibilità dei libri usati su Libraccio e ti avviso " +
   "quando una copia diventa disponibile.\n\n" +
-  "Usa i pulsanti qui sotto per aggiungere un libro tramite ISBN o link " +
-  "Libraccio, visualizzare la tua lista o rimuovere un libro. " +
+  "Usa i pulsanti qui sotto per aggiungere un libro tramite ISBN, link " +
+  "Libraccio o titolo, visualizzare la tua lista o rimuovere un libro. " +
   `Apri ${helpButton} per maggiori informazioni.`;
 
 const helpMessage =
   "❓ Comandi\n\n" +
-  `• ${addBookButton} o /watch — aggiungi un libro tramite ISBN o link Libraccio\n` +
+  `• ${addBookButton} o /watch — aggiungi un libro tramite ISBN, link Libraccio o titolo\n` +
   `• ${listBooksButton} o /list — mostra i libri monitorati\n` +
   `• ${removeBookButton} o /unwatch — rimuovi un libro\n` +
   `• ${cancelButton} o /cancel — annulla l'operazione corrente\n\n` +
@@ -110,6 +112,17 @@ const helpMessage =
 // Stores one pending command for each Telegram chat.
 // These temporary values reset when the application restarts.
 const pendingCommands = new Map<number, PendingCommand>();
+
+// Stores title-search results while one user is choosing an edition.
+const pendingBookSearchResults = new Map<number, LibraccioBookSearchResult[]>();
+
+/**
+ * Clears every temporary operation associated with one Telegram chat.
+ */
+function clearPendingOperation(telegramChatId: number): void {
+  pendingCommands.delete(telegramChatId);
+  pendingBookSearchResults.delete(telegramChatId);
+}
 
 // Stores the current book-add rate limit for each Telegram chat.
 const bookAddRateLimits = new Map<number, BookAddRateLimit>();
@@ -192,7 +205,7 @@ async function showRemoveBookKeyboard(
   const watchlist = getWatchlist(telegramChatId, source);
 
   if (watchlist.length === 0) {
-    pendingCommands.delete(telegramChatId);
+    clearPendingOperation(telegramChatId);
 
     await sendMainMenuMessage(
       telegramChatId,
@@ -211,6 +224,8 @@ async function showRemoveBookKeyboard(
 
     removeKeyboard.push([`${title} [${item.productCode}]`]);
   }
+
+  pendingBookSearchResults.delete(telegramChatId);
 
   pendingCommands.set(telegramChatId, "/unwatch");
 
@@ -353,6 +368,7 @@ async function sendBookAddedConfirmation(
 async function addBookToWatchlist(
   telegramChatId: number,
   isbn13: string,
+  selectedBook?: LibraccioBookSearchResult,
 ): Promise<void> {
   const addResult = addProductToWatchlist(telegramChatId, source, isbn13, {
     maximumActiveUsers,
@@ -399,6 +415,16 @@ async function addBookToWatchlist(
     return;
   }
 
+  if (selectedBook !== undefined) {
+    saveProductMetadata(isbn13, {
+      title: selectedBook.title,
+      authors: selectedBook.authors,
+      editionYear: selectedBook.editionYear,
+      publisher: selectedBook.publisher,
+      source: "libraccio",
+    });
+  }
+
   await sendTelegramMessage(
     telegramChatId,
     `🔄 Controllo l'ISBN ${isbn13} su Libraccio...`,
@@ -440,7 +466,18 @@ async function addBookToWatchlist(
   }
 
   // APIs are preferred, while Libraccio completes any missing fields.
-  const metadata = await getBookMetadata(isbn13, libraccioBook.metadata);
+  const metadata = await getBookMetadata(
+    isbn13,
+    selectedBook === undefined
+      ? libraccioBook.metadata
+      : {
+          title: selectedBook.title,
+          authors: selectedBook.authors,
+          editionYear: selectedBook.editionYear,
+          publisher: selectedBook.publisher,
+          source: "libraccio",
+        },
+  );
 
   if (metadata === undefined) {
     console.log(`No metadata found for ${isbn13}.`);
@@ -526,6 +563,201 @@ async function processIsbnCommand(
   }
 
   return true;
+}
+
+/**
+ * Formats one Libraccio edition for the Telegram selection message.
+ */
+function formatBookSearchResult(
+  result: LibraccioBookSearchResult,
+  index: number,
+): string {
+  const details = [
+    result.authors,
+    result.editionYear?.toString(),
+    result.publisher,
+  ].filter((value): value is string => value !== undefined);
+
+  const lines = [`${index + 1}. ${result.title}`];
+
+  if (details.length > 0) {
+    lines.push(details.join(" · "));
+  }
+
+  lines.push(`ISBN ${result.isbn13}`);
+
+  return lines.join("\n");
+}
+
+/**
+ * Shows the editions found on Libraccio using numbered Telegram buttons.
+ */
+async function showBookSearchResults(
+  telegramChatId: number,
+  results: LibraccioBookSearchResult[],
+  message = "Scegli l'edizione che vuoi monitorare.",
+): Promise<void> {
+  const numberButtons = results.map((_, index) => String(index + 1));
+  const searchKeyboard: string[][] = [];
+
+  for (let index = 0; index < numberButtons.length; index += 2) {
+    searchKeyboard.push(numberButtons.slice(index, index + 2));
+  }
+
+  searchKeyboard.push([cancelButton]);
+
+  pendingCommands.set(telegramChatId, "/watch");
+  pendingBookSearchResults.set(telegramChatId, results);
+
+  const formattedResults = results
+    .map((result, index) => formatBookSearchResult(result, index))
+    .join("\n\n");
+
+  await sendTelegramMessage(
+    telegramChatId,
+    `${message}\n\n${formattedResults}`,
+    {
+      keyboard: searchKeyboard,
+      oneTimeKeyboard: true,
+    },
+  );
+}
+
+/**
+ * Searches Libraccio for a title and asks the user to choose an edition.
+ */
+async function searchBooksByTitle(
+  telegramChatId: number,
+  input: string,
+): Promise<void> {
+  const query = input.trim();
+
+  pendingCommands.set(telegramChatId, "/watch");
+  pendingBookSearchResults.delete(telegramChatId);
+
+  if (query.length < 2 || query.length > 100) {
+    await sendTelegramMessage(
+      telegramChatId,
+      "Il titolo deve contenere da 2 a 100 caratteri.\n\n" +
+        "Invia un altro titolo oppure usa /cancel.",
+      {
+        removeKeyboard: true,
+      },
+    );
+
+    return;
+  }
+
+  const isAttemptAllowed = registerBookAddAttempt(telegramChatId);
+
+  if (!isAttemptAllowed) {
+    clearPendingOperation(telegramChatId);
+
+    await sendMainMenuMessage(
+      telegramChatId,
+      "Hai effettuato troppi tentativi di aggiunta in poco tempo. " +
+        "Riprova tra qualche secondo.",
+    );
+
+    return;
+  }
+
+  await sendTelegramMessage(
+    telegramChatId,
+    `🔎 Cerco “${query}” nel catalogo Libraccio...`,
+  );
+
+  let results: LibraccioBookSearchResult[];
+
+  try {
+    results = await searchLibraccioBooks(query);
+  } catch (error) {
+    const reason = error instanceof Error ? `: ${error.message}` : "";
+
+    console.error(`Unable to search Libraccio for "${query}"${reason}`);
+
+    await sendTelegramMessage(
+      telegramChatId,
+      "⚠️ Non è stato possibile completare la ricerca su Libraccio.\n\n" +
+        "Invia un altro titolo oppure usa /cancel.",
+      {
+        removeKeyboard: true,
+      },
+    );
+
+    return;
+  }
+
+  if (results.length === 0) {
+    await sendTelegramMessage(
+      telegramChatId,
+      "Non ho trovato edizioni corrispondenti nel catalogo Libraccio.\n\n" +
+        "Prova con un altro titolo oppure usa /cancel.",
+      {
+        removeKeyboard: true,
+      },
+    );
+
+    return;
+  }
+
+  await showBookSearchResults(telegramChatId, results);
+}
+
+/**
+ * Processes an ISBN, Libraccio URL, or book title during an addition.
+ */
+async function processAddBookInput(
+  telegramChatId: number,
+  input: string,
+): Promise<void> {
+  const isbn13 =
+    validateAndConvertToIsbn13(input) ?? getIsbnFromLibraccioUrl(input);
+
+  if (isbn13 === undefined) {
+    await searchBooksByTitle(telegramChatId, input);
+
+    return;
+  }
+
+  const wasProcessed = await processIsbnCommand(
+    telegramChatId,
+    "/watch",
+    isbn13,
+  );
+
+  if (wasProcessed) {
+    clearPendingOperation(telegramChatId);
+  }
+}
+
+/**
+ * Adds the edition selected from the current title-search results.
+ */
+async function processBookSearchSelection(
+  telegramChatId: number,
+  input: string,
+  results: LibraccioBookSearchResult[],
+): Promise<void> {
+  const selectedNumber = Number(input);
+  const selectedBook =
+    Number.isInteger(selectedNumber) && selectedNumber >= 1
+      ? results[selectedNumber - 1]
+      : undefined;
+
+  if (selectedBook === undefined) {
+    await showBookSearchResults(
+      telegramChatId,
+      results,
+      "Scelta non valida. Usa uno dei pulsanti oppure annulla.",
+    );
+
+    return;
+  }
+
+  clearPendingOperation(telegramChatId);
+
+  await addBookToWatchlist(telegramChatId, selectedBook.isbn13, selectedBook);
 }
 
 /**
@@ -698,7 +930,7 @@ async function handleTelegramMessage(
 
   if (pendingCommand !== undefined) {
     if (messageText === "/cancel") {
-      pendingCommands.delete(telegramChatId);
+      clearPendingOperation(telegramChatId);
 
       await sendMainMenuMessage(telegramChatId, "Operazione annullata.");
 
@@ -706,27 +938,31 @@ async function handleTelegramMessage(
     }
 
     if (!messageText.startsWith("/")) {
-      const isbnInput =
-        pendingCommand === "/unwatch"
-          ? getIsbnFromRemovalButton(messageText)
-          : messageText;
+      if (pendingCommand === "/watch") {
+        const searchResults = pendingBookSearchResults.get(telegramChatId);
 
+        if (searchResults === undefined) {
+          await processAddBookInput(telegramChatId, messageText);
+        } else {
+          await processBookSearchSelection(
+            telegramChatId,
+            messageText,
+            searchResults,
+          );
+        }
+
+        return;
+      }
+
+      const isbnInput = getIsbnFromRemovalButton(messageText);
       const wasIsbnValid = await processIsbnCommand(
         telegramChatId,
-        pendingCommand,
+        "/unwatch",
         isbnInput,
       );
 
       if (wasIsbnValid) {
-        pendingCommands.delete(telegramChatId);
-      } else if (pendingCommand === "/watch") {
-        await sendTelegramMessage(
-          telegramChatId,
-          "Invia un altro ISBN o link Libraccio, oppure usa /cancel.",
-          {
-            removeKeyboard: true,
-          },
-        );
+        clearPendingOperation(telegramChatId);
       } else {
         await showRemoveBookKeyboard(
           telegramChatId,
@@ -738,39 +974,40 @@ async function handleTelegramMessage(
     }
 
     // A new command interrupts only this user's current operation.
-    pendingCommands.delete(telegramChatId);
+    clearPendingOperation(telegramChatId);
   }
 
   const commandParts = messageText.split(/\s+/);
   const command = commandParts[0];
 
-  // Joins the remaining parts so ISBNs containing spaces are accepted.
-  const isbnInput = commandParts.slice(1).join("");
+  // Preserves title words; ISBN validation already ignores spaces.
+  const commandInput = commandParts.slice(1).join(" ");
 
   if (command === "/start") {
     await sendMainMenuMessage(telegramChatId, startMessage);
   } else if (command === "/help") {
     await sendMainMenuMessage(telegramChatId, helpMessage);
   } else if (command === "/watch") {
-    if (isbnInput === "") {
+    if (commandInput === "") {
+      pendingBookSearchResults.delete(telegramChatId);
       pendingCommands.set(telegramChatId, "/watch");
 
       await sendTelegramMessage(
         telegramChatId,
-        "Inviami l'ISBN o il link Libraccio del libro che vuoi " +
+        "Inviami l'ISBN, il link Libraccio o il titolo del libro che vuoi " +
           "monitorare.\n\n/cancel",
         {
           removeKeyboard: true,
         },
       );
     } else {
-      await processIsbnCommand(telegramChatId, "/watch", isbnInput);
+      await processAddBookInput(telegramChatId, commandInput);
     }
   } else if (command === "/unwatch") {
-    if (isbnInput === "") {
+    if (commandInput === "") {
       await showRemoveBookKeyboard(telegramChatId);
     } else {
-      await processIsbnCommand(telegramChatId, "/unwatch", isbnInput);
+      await processIsbnCommand(telegramChatId, "/unwatch", commandInput);
     }
   } else if (command === "/list") {
     await showWatchlist(telegramChatId);

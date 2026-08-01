@@ -12,6 +12,9 @@ import { validateAndConvertToIsbn13 } from "./isbn.js";
 const libraccioBookUrl = "https://www.libraccio.it/libro";
 const libraccioRequestTimeoutMilliseconds = 15000;
 
+const libraccioSearchUrl = "https://www.libraccio.it/src/";
+const maximumLibraccioSearchResults = 4;
+
 export type LibraccioAvailability = "available" | "unavailable" | "not-found";
 
 export interface LibraccioBookData {
@@ -19,6 +22,14 @@ export interface LibraccioBookData {
   metadata: BookMetadata | undefined;
   newPriceInCents: number | undefined;
   usedPriceInCents: number | undefined;
+}
+
+export interface LibraccioBookSearchResult {
+  isbn13: string;
+  title: string;
+  authors: string | undefined;
+  editionYear: number | undefined;
+  publisher: string | undefined;
 }
 
 /**
@@ -87,6 +98,155 @@ export function getIsbnFromLibraccioUrl(value: string): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * Converts the HTML entities used inside Libraccio tracking data.
+ */
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&#(\d+);/g, (entity, decimalCode: string) => {
+      const codePoint = Number(decimalCode);
+
+      return Number.isInteger(codePoint) && codePoint <= 0x10ffff
+        ? String.fromCodePoint(codePoint)
+        : entity;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (entity, hexadecimalCode: string) => {
+      const codePoint = Number.parseInt(hexadecimalCode, 16);
+
+      return Number.isInteger(codePoint) && codePoint <= 0x10ffff
+        ? String.fromCodePoint(codePoint)
+        : entity;
+    })
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Extracts one named value from a Libraccio product-tracking block.
+ */
+function getTrackingValue(
+  productBlock: string,
+  fieldName: string,
+): string | undefined {
+  const match = productBlock.match(
+    new RegExp(`['"]${fieldName}['"]\\s*:\\s*'((?:\\\\.|[^'])*)'`),
+  );
+
+  return match?.[1]?.replace(/\\'/g, "'").replace(/\\\\/g, "\\").trim();
+}
+
+/**
+ * Normalizes titles so punctuation, accents, and capitalization do not affect
+ * exact-title comparison.
+ */
+function normalizeBookTitle(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase("it-IT")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Searches Libraccio by title and returns at most four validated editions.
+ */
+export async function searchLibraccioBooks(
+  query: string,
+): Promise<LibraccioBookSearchResult[]> {
+  const url = new URL(libraccioSearchUrl);
+
+  url.searchParams.set("FT", query);
+  url.searchParams.set("CH", "libraccio");
+  url.searchParams.set("DF", "1120");
+  url.searchParams.set("PX", "1");
+  url.searchParams.set("SRT", "-1");
+
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(libraccioRequestTimeoutMilliseconds),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Libraccio returned HTTP status ${response.status}.`);
+  }
+
+  const html = decodeHtmlEntities(await response.text());
+
+  if (!html.includes("boxprodlist")) {
+    throw new Error("Libraccio returned an unexpected search page.");
+  }
+
+  const results: LibraccioBookSearchResult[] = [];
+  const foundIsbns = new Set<string>();
+  const productBlocks = html.matchAll(
+    /["']products["']\s*:\s*\[\{([\s\S]*?)\}\]/g,
+  );
+
+  for (const match of productBlocks) {
+    const productBlock = match[1];
+
+    if (productBlock === undefined) {
+      continue;
+    }
+
+    const title = getTrackingValue(productBlock, "name");
+    const productCode = getTrackingValue(productBlock, "id");
+
+    if (title === undefined || productCode === undefined) {
+      continue;
+    }
+
+    const isbn13 = validateAndConvertToIsbn13(productCode);
+
+    if (isbn13 === undefined || foundIsbns.has(isbn13)) {
+      continue;
+    }
+
+    const authors = getTrackingValue(productBlock, "author");
+    const publisher = getTrackingValue(productBlock, "publisher");
+    const editionYearText = getTrackingValue(productBlock, "yearEdition");
+
+    const editionYear =
+      editionYearText !== undefined && /^\d{4}$/.test(editionYearText)
+        ? Number(editionYearText)
+        : undefined;
+
+    foundIsbns.add(isbn13);
+    results.push({
+      isbn13,
+      title,
+      authors: authors === "" ? undefined : authors,
+      editionYear,
+      publisher: publisher === "" ? undefined : publisher,
+    });
+  }
+
+  const normalizedQuery = normalizeBookTitle(query);
+
+  return results
+    .sort((firstResult, secondResult) => {
+      const firstIsExact =
+        normalizeBookTitle(firstResult.title) === normalizedQuery;
+      const secondIsExact =
+        normalizeBookTitle(secondResult.title) === normalizedQuery;
+
+      if (firstIsExact !== secondIsExact) {
+        return firstIsExact ? -1 : 1;
+      }
+
+      if (firstIsExact && secondIsExact) {
+        return (secondResult.editionYear ?? 0) - (firstResult.editionYear ?? 0);
+      }
+
+      return 0;
+    })
+    .slice(0, maximumLibraccioSearchResults);
 }
 
 interface LibraccioJsonLd {
