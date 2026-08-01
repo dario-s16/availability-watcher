@@ -19,3 +19,6 @@ Thumbs.db
 
 # Runtime data
 data/
+
+# Local Railway project link
+.railway/
