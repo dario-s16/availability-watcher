@@ -47,6 +47,10 @@ database.exec(`
     source TEXT NOT NULL,
     product_id INTEGER NOT NULL,
     is_available INTEGER,
+    new_price_cents INTEGER
+      CHECK (new_price_cents IS NULL OR new_price_cents >= 0),
+    used_price_cents INTEGER
+      CHECK (used_price_cents IS NULL OR used_price_cents >= 0),
     last_checked_at TEXT,
 
     UNIQUE (source, product_id),
@@ -86,6 +90,33 @@ database.exec(`
   ON watches (availability_status_id);
 `);
 
+// Adds price columns to databases created before price tracking existed.
+const availabilityStatusColumns = database
+  .prepare("PRAGMA table_info(availability_status)")
+  .all() as Array<{ name: string }>;
+
+if (
+  !availabilityStatusColumns.some((column) => column.name === "new_price_cents")
+) {
+  database.exec(`
+    ALTER TABLE availability_status
+    ADD COLUMN new_price_cents INTEGER
+      CHECK (new_price_cents IS NULL OR new_price_cents >= 0)
+  `);
+}
+
+if (
+  !availabilityStatusColumns.some(
+    (column) => column.name === "used_price_cents",
+  )
+) {
+  database.exec(`
+    ALTER TABLE availability_status
+    ADD COLUMN used_price_cents INTEGER
+      CHECK (used_price_cents IS NULL OR used_price_cents >= 0)
+  `);
+}
+
 interface IdRow {
   id: number;
 }
@@ -118,6 +149,8 @@ interface WatchlistItemRow {
   edition_year: number | null;
   publisher: string | null;
   is_available: number | null;
+  new_price_cents: number | null;
+  used_price_cents: number | null;
   last_checked_at: string | null;
 }
 
@@ -146,6 +179,8 @@ export interface WatchlistItem {
   editionYear: number | undefined;
   publisher: string | undefined;
   isAvailable: boolean | undefined;
+  newPriceInCents: number | undefined;
+  usedPriceInCents: number | undefined;
   lastCheckedAt: string | undefined;
 }
 
@@ -490,6 +525,8 @@ export function getWatchlist(
           products.edition_year,
           products.publisher,
           availability_status.is_available,
+          availability_status.new_price_cents,
+          availability_status.used_price_cents,
           availability_status.last_checked_at
         FROM watches
         INNER JOIN users
@@ -512,6 +549,8 @@ export function getWatchlist(
     editionYear: row.edition_year ?? undefined,
     publisher: row.publisher ?? undefined,
     isAvailable: row.is_available === null ? undefined : row.is_available === 1,
+    newPriceInCents: row.new_price_cents ?? undefined,
+    usedPriceInCents: row.used_price_cents ?? undefined,
     lastCheckedAt: row.last_checked_at ?? undefined,
   }));
 }
@@ -578,6 +617,8 @@ export function saveAvailability(
   source: string,
   productCode: string,
   isAvailable: boolean,
+  newPriceInCents: number | undefined,
+  usedPriceInCents: number | undefined,
 ): void {
   const result = database
     .prepare(
@@ -585,6 +626,8 @@ export function saveAvailability(
         UPDATE availability_status
         SET
           is_available = ?,
+          new_price_cents = ?,
+          used_price_cents = ?,
           last_checked_at = CURRENT_TIMESTAMP
         WHERE source = ?
           AND product_id = (
@@ -594,7 +637,13 @@ export function saveAvailability(
           )
       `,
     )
-    .run(isAvailable ? 1 : 0, source, productCode);
+    .run(
+      isAvailable ? 1 : 0,
+      newPriceInCents ?? null,
+      usedPriceInCents ?? null,
+      source,
+      productCode,
+    );
 
   if (result.changes !== 1) {
     throw new Error("Cannot save availability for an unknown product.");

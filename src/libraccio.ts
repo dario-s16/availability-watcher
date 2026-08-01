@@ -17,6 +17,33 @@ export type LibraccioAvailability = "available" | "unavailable" | "not-found";
 export interface LibraccioBookData {
   availability: LibraccioAvailability;
   metadata: BookMetadata | undefined;
+  newPriceInCents: number | undefined;
+  usedPriceInCents: number | undefined;
+}
+
+/**
+ * Converts a Libraccio price into integer euro cents.
+ */
+function getPriceInCents(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const match = value.trim().match(/^(\d+)(?:[.,](\d{1,2}))?$/);
+
+  if (match === null) {
+    return undefined;
+  }
+
+  const euros = match[1];
+
+  if (euros === undefined) {
+    return undefined;
+  }
+
+  const cents = (match[2] ?? "").padEnd(2, "0");
+
+  return Number(euros) * 100 + Number(cents);
 }
 
 /**
@@ -154,6 +181,8 @@ export async function getLibraccioBookData(
     return {
       availability: "not-found",
       metadata: undefined,
+      newPriceInCents: undefined,
+      usedPriceInCents: undefined,
     };
   }
 
@@ -177,6 +206,17 @@ export async function getLibraccioBookData(
     throw new Error("Libraccio returned an unexpected product page.");
   }
 
+  const newPriceText =
+    html.match(/'productdiscount_price':'([^']+)'/)?.[1] ??
+    html.match(/'prezzonuovo':'([^']+)'/)?.[1];
+
+  const usedPriceText =
+    html.match(/'productused_price':'([^']+)'/)?.[1] ??
+    html.match(/'prezzousato':'([^']+)'/)?.[1];
+
+  const newPriceInCents = getPriceInCents(newPriceText);
+  const usedPriceInCents = getPriceInCents(usedPriceText);
+
   const metadata = getLibraccioMetadata(html, isbn13);
   const hasUsedBuyLink = html.includes("bBuyULink");
   const hasUsedBuyClass = html.includes("acquista-usato");
@@ -187,6 +227,8 @@ export async function getLibraccioBookData(
     return {
       availability: "available",
       metadata,
+      newPriceInCents,
+      usedPriceInCents,
     };
   }
 
@@ -195,6 +237,8 @@ export async function getLibraccioBookData(
     return {
       availability: "unavailable",
       metadata,
+      newPriceInCents,
+      usedPriceInCents: undefined,
     };
   }
 

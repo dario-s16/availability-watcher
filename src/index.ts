@@ -30,7 +30,7 @@ import { validateAndConvertToIsbn13 } from "./isbn.js";
 import {
   getIsbnFromLibraccioUrl,
   getLibraccioBookData,
-  type LibraccioAvailability,
+  type LibraccioBookData,
 } from "./libraccio.js";
 import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
 
@@ -226,9 +226,11 @@ async function showRemoveBookKeyboard(
  */
 async function saveAvailabilityAndNotifyIfNeeded(
   isbn13: string,
-  availability: LibraccioAvailability,
+  libraccioBook: LibraccioBookData,
   requestingChatId?: number,
 ): Promise<void> {
+  const { availability, newPriceInCents, usedPriceInCents } = libraccioBook;
+
   // A missing page is not an availability state to save.
   if (availability === "not-found") {
     return;
@@ -250,12 +252,29 @@ async function saveAvailabilityAndNotifyIfNeeded(
       const authors = product?.authors ?? "non disponibili";
       const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
 
-      const notification =
-        `✅ Copia usata disponibile su Libraccio!\n\n` +
-        `Titolo: ${title}\n` +
-        `Autori: ${authors}\n` +
-        `ISBN: ${isbn13}\n\n` +
-        bookUrl;
+      const notificationLines = [
+        "✅ Copia usata disponibile su Libraccio!",
+        "",
+        `Titolo: ${title}`,
+        `Autori: ${authors}`,
+        `ISBN: ${isbn13}`,
+      ];
+
+      if (newPriceInCents !== undefined) {
+        notificationLines.push(
+          `Prezzo nuovo: ${formatPriceInEuros(newPriceInCents)}`,
+        );
+      }
+
+      if (usedPriceInCents !== undefined) {
+        notificationLines.push(
+          `Prezzo usato: ${formatPriceInEuros(usedPriceInCents)}`,
+        );
+      }
+
+      notificationLines.push("", bookUrl);
+
+      const notification = notificationLines.join("\n");
 
       for (const telegramChatId of chatIdsToNotify) {
         try {
@@ -273,7 +292,13 @@ async function saveAvailabilityAndNotifyIfNeeded(
   }
 
   // The shared state is stored after all notification attempts.
-  saveAvailability(source, isbn13, isAvailable);
+  saveAvailability(
+    source,
+    isbn13,
+    isAvailable,
+    newPriceInCents,
+    usedPriceInCents,
+  );
 }
 
 /**
@@ -282,8 +307,10 @@ async function saveAvailabilityAndNotifyIfNeeded(
 async function sendBookAddedConfirmation(
   telegramChatId: number,
   isbn13: string,
-  isAvailable: boolean,
+  libraccioBook: LibraccioBookData,
 ): Promise<void> {
+  const { availability, newPriceInCents, usedPriceInCents } = libraccioBook;
+  const isAvailable = availability === "available";
   const product = getProductDetails(isbn13);
   const title = product?.title ?? "Titolo non disponibile";
   const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
@@ -297,8 +324,17 @@ async function sendBookAddedConfirmation(
   lines.push(
     `ISBN: ${isbn13}`,
     `Copia usata: ${isAvailable ? "✅ disponibile ora" : "❌ non disponibile"}`,
-    "",
   );
+
+  if (newPriceInCents !== undefined) {
+    lines.push(`Prezzo nuovo: ${formatPriceInEuros(newPriceInCents)}`);
+  }
+
+  if (usedPriceInCents !== undefined) {
+    lines.push(`Prezzo usato: ${formatPriceInEuros(usedPriceInCents)}`);
+  }
+
+  lines.push("");
 
   if (isAvailable) {
     lines.push("🔔 Continuerò a monitorare questo libro.");
@@ -416,15 +452,11 @@ async function addBookToWatchlist(
 
   await saveAvailabilityAndNotifyIfNeeded(
     isbn13,
-    libraccioBook.availability,
+    libraccioBook,
     telegramChatId,
   );
 
-  await sendBookAddedConfirmation(
-    telegramChatId,
-    isbn13,
-    libraccioBook.availability === "available",
-  );
+  await sendBookAddedConfirmation(telegramChatId, isbn13, libraccioBook);
 }
 
 /**
@@ -515,6 +547,16 @@ function formatUtcDateForItaly(utcDateText: string): string {
 }
 
 /**
+ * Formats integer euro cents for Italian messages.
+ */
+function formatPriceInEuros(priceInCents: number): string {
+  return new Intl.NumberFormat("it-IT", {
+    style: "currency",
+    currency: "EUR",
+  }).format(priceInCents / 100);
+}
+
+/**
  * Escapes text received from external metadata before using Telegram HTML.
  */
 function escapeTelegramHtml(value: string): string {
@@ -576,6 +618,20 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
 
     if (authors !== undefined) {
       lines.push(`Autori: ${authors}`);
+    }
+
+    const priceParts: string[] = [];
+
+    if (item.newPriceInCents !== undefined) {
+      priceParts.push(`Nuovo ${formatPriceInEuros(item.newPriceInCents)}`);
+    }
+
+    if (item.usedPriceInCents !== undefined) {
+      priceParts.push(`Usato ${formatPriceInEuros(item.usedPriceInCents)}`);
+    }
+
+    if (priceParts.length > 0) {
+      lines.push(priceParts.join(" · "));
     }
 
     if (item.editionYear !== undefined) {
@@ -815,10 +871,7 @@ async function runPeriodicChecks(): Promise<void> {
           console.log(`Metadata saved for ${isbn13} from Libraccio.`);
         }
 
-        await saveAvailabilityAndNotifyIfNeeded(
-          isbn13,
-          libraccioBook.availability,
-        );
+        await saveAvailabilityAndNotifyIfNeeded(isbn13, libraccioBook);
 
         let result = "available";
 
