@@ -60,6 +60,9 @@ const databaseBackupIntervalMilliseconds =
   databaseBackupIntervalHours * 60 * 60 * 1000;
 const maximumDatabaseBackups = 30;
 
+// Telegram accepts at most 4096 characters in one message.
+const maximumTelegramMessageLength = 4000;
+
 const addBookButton = "➕ Aggiungi libro";
 const listBooksButton = "📚 Libri monitorati";
 const removeBookButton = "🗑 Rimuovi libro";
@@ -592,19 +595,36 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
     return lines.join("\n");
   });
 
-  const message =
+  const header =
     `📚 Libri monitorati: ${watchlist.length}\n` +
     `Copie usate: ✅ ${availableCount} disponibili · ` +
     `❌ ${unavailableCount} non disponibili · ` +
-    `❔ ${unknownCount} sconosciute\n\n` +
-    books.join("\n\n");
+    `❔ ${unknownCount} sconosciute`;
 
-  await sendTelegramMessage(telegramChatId, message, {
-    parseMode: "HTML",
-    disableLinkPreview: true,
-    keyboard: mainKeyboard,
-    persistentKeyboard: true,
-  });
+  const messages: string[] = [];
+  let currentMessage = header;
+
+  for (const book of books) {
+    const extendedMessage = `${currentMessage}\n\n${book}`;
+
+    if (extendedMessage.length <= maximumTelegramMessageLength) {
+      currentMessage = extendedMessage;
+    } else {
+      messages.push(currentMessage);
+      currentMessage = book;
+    }
+  }
+
+  messages.push(currentMessage);
+
+  for (const message of messages) {
+    await sendTelegramMessage(telegramChatId, message, {
+      parseMode: "HTML",
+      disableLinkPreview: true,
+      keyboard: mainKeyboard,
+      persistentKeyboard: true,
+    });
+  }
 }
 
 /**
