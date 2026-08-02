@@ -98,7 +98,7 @@ const startMessage =
 
 const helpMessage =
   "❓ Comandi\n\n" +
-  `• ${addBookButton} o /watch — aggiungi un libro tramite titolo, ISBN o link Libraccio\n` +
+  `• ${addBookButton} o /watch — aggiungi un libro tramite titolo (anche seguito dall'autore), ISBN o link Libraccio\n` +
   `• ${listBooksButton} o /list — mostra i libri monitorati\n` +
   `• ${removeBookButton} o /unwatch — rimuovi un libro\n` +
   `• ${cancelButton} o /cancel — annulla l'operazione corrente\n\n` +
@@ -630,7 +630,8 @@ async function showBookSearchResults(
 }
 
 /**
- * Searches Libraccio for a title and asks the user to choose an edition.
+ * Searches Libraccio for a title and optional author, then asks the user
+ * to choose an edition.
  */
 async function searchBooksByTitle(
   telegramChatId: number,
@@ -644,7 +645,7 @@ async function searchBooksByTitle(
   if (query.length < 2 || query.length > 100) {
     await sendTelegramMessage(
       telegramChatId,
-      "Il titolo deve contenere da 2 a 100 caratteri.\n\n" +
+      "La ricerca deve contenere da 2 a 100 caratteri.\n\n" +
         "Invia un altro titolo oppure usa /cancel.",
       {
         removeKeyboard: true,
@@ -1031,8 +1032,8 @@ async function handleTelegramMessage(
 
       await sendTelegramMessage(
         telegramChatId,
-        "Inviami il titolo, l'ISBN o il link Libraccio del libro che vuoi " +
-          "monitorare.\n\n/cancel",
+        "Inviami il titolo, anche seguito dall'autore, oppure l'ISBN o il link " +
+          "Libraccio.\n\n/cancel",
         {
           removeKeyboard: true,
         },
