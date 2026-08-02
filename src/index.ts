@@ -883,11 +883,18 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
     return lines.join("\n");
   });
 
+  const availabilitySummary = [
+    `✅ ${availableCount} disponibili`,
+    `❌ ${unavailableCount} non disponibili`,
+  ];
+
+  if (unknownCount > 0) {
+    availabilitySummary.push(`❔ ${unknownCount} sconosciute`);
+  }
+
   const header =
     `📚 Libri monitorati: ${watchlist.length}\n` +
-    `Copie usate: ✅ ${availableCount} disponibili · ` +
-    `❌ ${unavailableCount} non disponibili · ` +
-    `❔ ${unknownCount} sconosciute`;
+    `Copie usate: ${availabilitySummary.join(" · ")}`;
 
   const messages: string[] = [];
   let currentMessage = header;
