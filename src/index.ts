@@ -98,7 +98,7 @@ const startMessage =
 
 const helpMessage =
   "❓ Comandi\n\n" +
-  `• ${addBookButton} o /watch — aggiungi un libro tramite ISBN, link Libraccio o titolo\n` +
+  `• ${addBookButton} o /watch — aggiungi un libro tramite titolo, ISBN o link Libraccio\n` +
   `• ${listBooksButton} o /list — mostra i libri monitorati\n` +
   `• ${removeBookButton} o /unwatch — rimuovi un libro\n` +
   `• ${cancelButton} o /cancel — annulla l'operazione corrente\n\n` +
@@ -390,7 +390,8 @@ async function addBookToWatchlist(
   if (addResult === "watch-limit-reached") {
     await sendMainMenuMessage(
       telegramChatId,
-      `Puoi monitorare al massimo ${maximumWatchesPerUser} libri.`,
+      `Hai raggiunto il limite di ${maximumWatchesPerUser} libri monitorati. ` +
+        "Rimuovine uno prima di aggiungerne un altro.",
     );
 
     return;
@@ -1027,7 +1028,7 @@ async function handleTelegramMessage(
 
       await sendTelegramMessage(
         telegramChatId,
-        "Inviami l'ISBN, il link Libraccio o il titolo del libro che vuoi " +
+        "Inviami il titolo, l'ISBN o il link Libraccio del libro che vuoi " +
           "monitorare.\n\n/cancel",
         {
           removeKeyboard: true,
