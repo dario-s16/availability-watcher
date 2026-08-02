@@ -125,6 +125,15 @@ interface CountRow {
   total: number;
 }
 
+interface BotStatisticsRow {
+  registered_users: number;
+  active_users: number;
+  total_watches: number;
+  unique_books: number;
+  available_books: number;
+  unknown_books: number;
+}
+
 interface ProductDetailsRow {
   title: string | null;
   authors: string | null;
@@ -167,6 +176,15 @@ export interface AddWatchLimits {
   maximumUniqueBooks: number;
 }
 
+export interface BotStatistics {
+  registeredUsers: number;
+  activeUsers: number;
+  totalWatches: number;
+  uniqueBooks: number;
+  availableBooks: number;
+  unknownBooks: number;
+}
+
 export interface ProductDetails {
   title: string | undefined;
   authors: string | undefined;
@@ -199,6 +217,48 @@ export function registerTelegramUser(telegramChatId: number): void {
       `,
     )
     .run(telegramChatId);
+}
+
+/**
+ * Returns a summary of the current bot usage for one availability source.
+ */
+export function getBotStatistics(source: string): BotStatistics {
+  const row = database
+    .prepare(
+      `
+        SELECT
+          (SELECT COUNT(*) FROM users) AS registered_users,
+          COUNT(DISTINCT watches.user_id) AS active_users,
+          COUNT(watches.id) AS total_watches,
+          COUNT(DISTINCT availability_status.id) AS unique_books,
+          COUNT(
+            DISTINCT CASE
+              WHEN availability_status.is_available = 1
+              THEN availability_status.id
+            END
+          ) AS available_books,
+          COUNT(
+            DISTINCT CASE
+              WHEN availability_status.is_available IS NULL
+              THEN availability_status.id
+            END
+          ) AS unknown_books
+        FROM watches
+        INNER JOIN availability_status
+          ON availability_status.id = watches.availability_status_id
+        WHERE availability_status.source = ?
+      `,
+    )
+    .get(source) as BotStatisticsRow;
+
+  return {
+    registeredUsers: row.registered_users,
+    activeUsers: row.active_users,
+    totalWatches: row.total_watches,
+    uniqueBooks: row.unique_books,
+    availableBooks: row.available_books,
+    unknownBooks: row.unknown_books,
+  };
 }
 
 /**

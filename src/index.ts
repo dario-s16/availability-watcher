@@ -12,10 +12,12 @@ import {
   maximumActiveUsers,
   maximumUniqueBooks,
   maximumWatchesPerUser,
+  telegramAdminChatId,
 } from "./config.js";
 import {
   addProductToWatchlist,
   createDatabaseBackup,
+  getBotStatistics,
   getPreviousAvailability,
   getProductCodesDueForCheck,
   getProductDetails,
@@ -923,6 +925,24 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
 }
 
 /**
+ * Sends the current usage summary to the bot administrator.
+ */
+async function showBotStatistics(telegramChatId: number): Promise<void> {
+  const statistics = getBotStatistics(source);
+
+  const message =
+    "📊 Statistiche del bot\n\n" +
+    `Utenti registrati: ${statistics.registeredUsers}\n` +
+    `Utenti attivi: ${statistics.activeUsers}\n` +
+    `Monitoraggi totali: ${statistics.totalWatches}\n` +
+    `Libri distinti: ${statistics.uniqueBooks}\n` +
+    `Usati disponibili: ${statistics.availableBooks}\n` +
+    `Stato sconosciuto: ${statistics.unknownBooks}`;
+
+  await sendMainMenuMessage(telegramChatId, message);
+}
+
+/**
  * Interprets one text message from one Telegram chat.
  */
 async function handleTelegramMessage(
@@ -994,6 +1014,12 @@ async function handleTelegramMessage(
     await sendMainMenuMessage(telegramChatId, startMessage);
   } else if (command === "/help") {
     await sendMainMenuMessage(telegramChatId, helpMessage);
+  } else if (
+    command === "/stats" &&
+    telegramAdminChatId !== undefined &&
+    telegramChatId === telegramAdminChatId
+  ) {
+    await showBotStatistics(telegramChatId);
   } else if (command === "/watch") {
     if (commandInput === "") {
       pendingBookSearchResults.delete(telegramChatId);
