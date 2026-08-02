@@ -265,14 +265,16 @@ async function saveAvailabilityAndNotifyIfNeeded(
 
     if (chatIdsToNotify.length > 0) {
       const product = getProductDetails(isbn13);
-      const title = product?.title ?? "non disponibile";
-      const authors = product?.authors ?? "non disponibili";
+      const title = escapeTelegramHtml(
+        product?.title ?? "Titolo non disponibile",
+      );
+      const authors = escapeTelegramHtml(product?.authors ?? "non disponibili");
       const bookUrl = `https://www.libraccio.it/libro/${isbn13}/book.html`;
 
       const notificationLines = [
         "✅ Copia usata disponibile su Libraccio!",
         "",
-        `Titolo: ${title}`,
+        `📖 <a href="${bookUrl}">${title}</a>`,
         `Autori: ${authors}`,
         `ISBN: ${isbn13}`,
       ];
@@ -289,13 +291,14 @@ async function saveAvailabilityAndNotifyIfNeeded(
         );
       }
 
-      notificationLines.push("", bookUrl);
-
       const notification = notificationLines.join("\n");
 
       for (const telegramChatId of chatIdsToNotify) {
         try {
-          await sendTelegramMessage(telegramChatId, notification);
+          await sendTelegramMessage(telegramChatId, notification, {
+            parseMode: "HTML",
+            disableLinkPreview: false,
+          });
         } catch (error) {
           const reason = error instanceof Error ? `: ${error.message}` : "";
 
