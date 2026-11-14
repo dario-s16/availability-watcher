@@ -220,6 +220,23 @@ export function registerTelegramUser(telegramChatId: number): void {
 }
 
 /**
+ * Deletes one Telegram user and all watches linked to them.
+ */
+export function deleteTelegramUser(telegramChatId: number): boolean {
+  // Related watches are removed automatically by the foreign-key cascade.
+  const result = database
+    .prepare(
+      `
+        DELETE FROM users
+        WHERE telegram_chat_id = ?
+      `,
+    )
+    .run(telegramChatId);
+
+  return result.changes === 1;
+}
+
+/**
  * Returns a summary of the current bot usage for one availability source.
  */
 export function getBotStatistics(source: string): BotStatistics {

@@ -17,6 +17,7 @@ import {
 import {
   addProductToWatchlist,
   createDatabaseBackup,
+  deleteTelegramUser,
   getBotStatistics,
   getPreviousAvailability,
   getProductCodesDueForCheck,
@@ -101,14 +102,15 @@ const helpMessage =
   `• ${addBookButton} o /watch — aggiungi un libro tramite titolo (anche seguito dall'autore), ISBN o link Libraccio\n` +
   `• ${listBooksButton} o /list — mostra i libri monitorati\n` +
   `• ${removeBookButton} o /unwatch — rimuovi un libro\n` +
+  "• /deleteaccount — elimina il tuo account e i dati collegati\n" +
   `• ${cancelButton} o /cancel — annulla l'operazione corrente\n\n` +
   `La disponibilità dell'usato viene controllata circa ogni ` +
   `${checkIntervalMinutes} minuti.\n\n` +
   "🔒 Privacy\n" +
   "Il bot conserva il tuo Chat ID e gli ISBN monitorati soltanto per " +
-  "fornire il servizio. La tua lista non è visibile agli altri utenti.\n\n" +
-  "Per assistenza o per richiedere la cancellazione dei dati: " +
-  "monitorusatolibraccio@outlook.com\n\n" +
+  "fornire il servizio. La tua lista non è visibile agli altri utenti.\n" +
+  "Puoi cancellare i dati in qualsiasi momento con /deleteaccount.\n\n" +
+  "Per assistenza: monitorusatolibraccio@outlook.com\n\n" +
   "Bot indipendente e non ufficiale.";
 
 // Stores one pending command for each Telegram chat.
@@ -1033,6 +1035,44 @@ async function handleTelegramMessage(
     telegramChatId === telegramAdminChatId
   ) {
     await showBotStatistics(telegramChatId);
+  } else if (command === "/deleteaccount") {
+    // Requires an explicit second command before deleting the user's data.
+    if (commandInput !== "conferma") {
+      await sendTelegramMessage(
+        telegramChatId,
+        "⚠️ Questa operazione elimina il tuo account e tutti i libri " +
+          "monitorati.\n\n" +
+          "Per confermare, invia /deleteaccount conferma.",
+        {
+          removeKeyboard: true,
+        },
+      );
+
+      return;
+    }
+
+    const wasDeleted = deleteTelegramUser(telegramChatId);
+
+    clearPendingOperation(telegramChatId);
+    bookAddRateLimits.delete(telegramChatId);
+
+    if (!wasDeleted) {
+      await sendMainMenuMessage(
+        telegramChatId,
+        "Non risultano dati associati al tuo account.",
+      );
+
+      return;
+    }
+
+    await sendTelegramMessage(
+      telegramChatId,
+      "✅ I tuoi dati sono stati cancellati.\n\n" +
+        "Se userai di nuovo il bot, verrà creato un nuovo account.",
+      {
+        removeKeyboard: true,
+      },
+    );
   } else if (command === "/watch") {
     if (commandInput === "") {
       pendingBookSearchResults.delete(telegramChatId);

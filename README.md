@@ -60,6 +60,8 @@ npm test
 
 The database stores Telegram chat identifiers and the books monitored by each user.
 
+Users can delete their account and watchlist with `/deleteaccount`. Deleted data may remain in automatic backups until those backups are replaced.
+
 ## Disclaimer
 
 This is an independent project and is not affiliated with Libraccio.
