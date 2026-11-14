@@ -39,7 +39,7 @@ import {
 } from "./libraccio.js";
 import { getTelegramUpdates, sendTelegramMessage } from "./telegram.js";
 
-type PendingCommand = "/watch" | "/unwatch";
+type PendingCommand = "/watch" | "/unwatch" | "/deleteaccount";
 
 interface BookAddRateLimit {
   attemptCount: number;
@@ -958,6 +958,34 @@ async function showBotStatistics(telegramChatId: number): Promise<void> {
 }
 
 /**
+ * Deletes one Telegram account and clears its temporary state.
+ */
+async function deleteTelegramAccount(telegramChatId: number): Promise<void> {
+  const wasDeleted = deleteTelegramUser(telegramChatId);
+
+  clearPendingOperation(telegramChatId);
+  bookAddRateLimits.delete(telegramChatId);
+
+  if (!wasDeleted) {
+    await sendMainMenuMessage(
+      telegramChatId,
+      "Non risultano dati associati al tuo account.",
+    );
+
+    return;
+  }
+
+  await sendTelegramMessage(
+    telegramChatId,
+    "✅ I tuoi dati sono stati cancellati.\n\n" +
+      "Se userai di nuovo il bot, verrà creato un nuovo account.",
+    {
+      removeKeyboard: true,
+    },
+  );
+}
+
+/**
  * Interprets one text message from one Telegram chat.
  */
 async function handleTelegramMessage(
@@ -980,6 +1008,24 @@ async function handleTelegramMessage(
     }
 
     if (!messageText.startsWith("/")) {
+      if (pendingCommand === "/deleteaccount") {
+        if (messageText !== "DELETE") {
+          await sendTelegramMessage(
+            telegramChatId,
+            "Conferma non valida. Scrivi DELETE in maiuscolo oppure usa /cancel.",
+            {
+              removeKeyboard: true,
+            },
+          );
+
+          return;
+        }
+
+        await deleteTelegramAccount(telegramChatId);
+
+        return;
+      }
+
       if (pendingCommand === "/watch") {
         const searchResults = pendingBookSearchResults.get(telegramChatId);
 
@@ -1036,39 +1082,15 @@ async function handleTelegramMessage(
   ) {
     await showBotStatistics(telegramChatId);
   } else if (command === "/deleteaccount") {
-    // Requires an explicit second command before deleting the user's data.
-    if (commandInput !== "conferma") {
-      await sendTelegramMessage(
-        telegramChatId,
-        "⚠️ Questa operazione elimina il tuo account e tutti i libri " +
-          "monitorati.\n\n" +
-          "Per confermare, invia /deleteaccount conferma.",
-        {
-          removeKeyboard: true,
-        },
-      );
-
-      return;
-    }
-
-    const wasDeleted = deleteTelegramUser(telegramChatId);
-
-    clearPendingOperation(telegramChatId);
-    bookAddRateLimits.delete(telegramChatId);
-
-    if (!wasDeleted) {
-      await sendMainMenuMessage(
-        telegramChatId,
-        "Non risultano dati associati al tuo account.",
-      );
-
-      return;
-    }
+    // Requires a separate confirmation message before deleting the account.
+    pendingCommands.set(telegramChatId, "/deleteaccount");
+    pendingBookSearchResults.delete(telegramChatId);
 
     await sendTelegramMessage(
       telegramChatId,
-      "✅ I tuoi dati sono stati cancellati.\n\n" +
-        "Se userai di nuovo il bot, verrà creato un nuovo account.",
+      "⚠️ Questa operazione elimina il tuo account e tutti i libri " +
+        "monitorati.\n\n" +
+        "Per confermare, scrivi DELETE.\n\n/cancel",
       {
         removeKeyboard: true,
       },
