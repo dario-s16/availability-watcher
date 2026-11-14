@@ -6,6 +6,8 @@ A free Telegram bot that monitors the availability and price of used books on Li
 
 Try it here: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibraccioBot)
 
+> The bot depends on Libraccio's current website structure and may require updates if the site changes.
+
 ### Features
 
 - Search by title, author, ISBN or Libraccio link
@@ -20,6 +22,8 @@ Try it here: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibraccioBot)
 Bot Telegram gratuito che monitora la disponibilità e il prezzo dei libri usati su Libraccio.
 
 Puoi provarlo qui: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibraccioBot)
+
+> Il funzionamento dipende dalla struttura attuale del sito Libraccio e potrebbe richiedere aggiornamenti se il sito cambia.
 
 ### Funzionalità
 
