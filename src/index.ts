@@ -303,9 +303,7 @@ async function saveAvailabilityAndNotifyIfNeeded(
           const reason = error instanceof Error ? `: ${error.message}` : "";
 
           // One unreachable user must not block notifications to other users.
-          console.error(
-            `Unable to notify Telegram chat ${telegramChatId}${reason}`,
-          );
+          console.error(`Unable to notify a Telegram user${reason}`);
         }
       }
     }
@@ -681,7 +679,7 @@ async function searchBooksByTitle(
   } catch (error) {
     const reason = error instanceof Error ? `: ${error.message}` : "";
 
-    console.error(`Unable to search Libraccio for "${query}"${reason}`);
+    console.error(`Unable to search Libraccio${reason}`);
 
     await sendTelegramMessage(
       telegramChatId,
@@ -1078,9 +1076,7 @@ async function runTelegramBot(): Promise<void> {
         if (message?.text !== undefined && message.chat.type === "private") {
           const telegramChatId = message.chat.id;
 
-          console.log(
-            `Received Telegram message from ${telegramChatId}: ${message.text}`,
-          );
+          // console.log("Received a Telegram message.");
 
           try {
             // Receiving any private message is enough to register the user.
