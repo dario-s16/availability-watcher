@@ -36,7 +36,7 @@ Puoi provarlo qui: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibracci
 
 ## Local setup
 
-Requires Node.js 24.
+Requires Node.js 24.22.3 or a newer Node.js 24 release.
 
 ```bash
 npm install
@@ -45,7 +45,9 @@ npm run build
 npm start
 ```
 
-Add the Telegram bot token and Google Books API key to `.env`.
+Add the Telegram bot token to `.env`. The Google Books API key is optional.
+
+The optional `TELEGRAM_ADMIN_CHAT_ID` enables the private `/stats` command for the configured chat.
 
 Run the project checks with:
 
