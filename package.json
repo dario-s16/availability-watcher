@@ -2,7 +2,7 @@
   "name": "availability-watcher",
   "version": "0.1.0",
   "private": true,
-  "description": "A learning-first, self-hosted application for monitoring product availability and prices from configurable sources.",
+  "description": "A Telegram bot that monitors used-book availability and prices on Libraccio.",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
