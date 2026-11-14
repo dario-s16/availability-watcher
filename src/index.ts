@@ -827,16 +827,18 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
     return secondBookIsAvailable - firstBookIsAvailable;
   });
 
-  const availableCount = watchlist.filter(
-    (item) => item.isAvailable === true,
-  ).length;
+  // Uses available used copies to calculate the count and price total.
+  const availableBooks = watchlist.filter((item) => item.isAvailable === true);
 
-  const unavailableCount = watchlist.filter(
-    (item) => item.isAvailable === false,
-  ).length;
+  const availableCount = availableBooks.length;
 
-  const unknownCount = watchlist.filter(
-    (item) => item.isAvailable === undefined,
+  const totalUsedPriceInCents = availableBooks.reduce(
+    (total, item) => total + (item.usedPriceInCents ?? 0),
+    0,
+  );
+
+  const availableBooksWithoutUsedPriceCount = availableBooks.filter(
+    (item) => item.usedPriceInCents === undefined,
   ).length;
 
   const books = watchlist.map((item) => {
@@ -888,18 +890,26 @@ async function showWatchlist(telegramChatId: number): Promise<void> {
     return lines.join("\n");
   });
 
-  const availabilitySummary = [
-    `✅ ${availableCount} disponibili`,
-    `❌ ${unavailableCount} non disponibili`,
-  ];
+  // Explains when available copies with no price are excluded from the total.
+  let missingPriceNote = "";
 
-  if (unknownCount > 0) {
-    availabilitySummary.push(`❔ ${unknownCount} sconosciute`);
+  if (availableBooksWithoutUsedPriceCount > 0) {
+    const copyLabel =
+      availableBooksWithoutUsedPriceCount === 1 ? "copia" : "copie";
+
+    const excludedLabel =
+      availableBooksWithoutUsedPriceCount === 1 ? "non inclusa" : "non incluse";
+
+    missingPriceNote =
+      ` (${availableBooksWithoutUsedPriceCount} ${copyLabel} ` +
+      `senza prezzo ${excludedLabel})`;
   }
 
   const header =
     `📚 Libri monitorati: ${watchlist.length}\n` +
-    `Copie usate: ${availabilitySummary.join(" · ")}`;
+    `Copie usate: ✅ ${availableCount} disponibili\n` +
+    `Totale usato: ${formatPriceInEuros(totalUsedPriceInCents)}` +
+    missingPriceNote;
 
   const messages: string[] = [];
   let currentMessage = header;
