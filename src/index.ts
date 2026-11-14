@@ -62,7 +62,7 @@ const bookAddRateLimitWindowMilliseconds = 60 * 1000;
 const databaseBackupIntervalHours = 24;
 const databaseBackupIntervalMilliseconds =
   databaseBackupIntervalHours * 60 * 60 * 1000;
-const maximumDatabaseBackups = 30;
+const maximumDatabaseBackups = 5;
 
 // Telegram accepts at most 4096 characters in one message.
 const maximumTelegramMessageLength = 4000;
