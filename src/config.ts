@@ -53,7 +53,7 @@ export const maximumWatchesPerUser = readPositiveInteger(
 
 export const maximumUniqueBooks = readPositiveInteger(
   "MAXIMUM_UNIQUE_BOOKS",
-  100,
+  250,
 );
 
 export const telegramAdminChatId = readOptionalPositiveInteger(
