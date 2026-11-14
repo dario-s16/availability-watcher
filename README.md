@@ -2,7 +2,7 @@
 
 ## English
 
-A free Telegram bot that monitors the availability and price of used books on Libraccio.
+A free Telegram bot that monitors used-book availability on Libraccio and shows current new and used prices.
 
 Try it here: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibraccioBot)
 
@@ -10,7 +10,7 @@ Try it here: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibraccioBot)
 
 ### Features
 
-- Search by title, author, ISBN or Libraccio link
+- Search by title, optionally followed by the author, ISBN or Libraccio link
 - Choose between different editions
 - Periodic used-book availability checks
 - New and used price information
@@ -19,7 +19,7 @@ Try it here: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibraccioBot)
 
 ## Italiano
 
-Bot Telegram gratuito che monitora la disponibilità e il prezzo dei libri usati su Libraccio.
+Bot Telegram gratuito che monitora la disponibilità dei libri usati su Libraccio e mostra i prezzi correnti del nuovo e dell'usato.
 
 Puoi provarlo qui: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibraccioBot)
 
@@ -27,7 +27,7 @@ Puoi provarlo qui: [@MonitorUsatoLibraccioBot](https://t.me/MonitorUsatoLibracci
 
 ### Funzionalità
 
-- Ricerca tramite titolo, autore, ISBN o link Libraccio
+- Ricerca tramite titolo, eventualmente seguito dall'autore, ISBN o link Libraccio
 - Scelta tra diverse edizioni
 - Controllo periodico della disponibilità dell'usato
 - Visualizzazione dei prezzi del nuovo e dell'usato
@@ -49,11 +49,11 @@ Add the Telegram bot token to `.env`. The Google Books API key is optional.
 
 The optional `TELEGRAM_ADMIN_CHAT_ID` enables the private `/stats` command for the configured chat.
 
-Run the project checks with:
+Run the project checks and tests with:
 
 ```bash
 npm run check
-npm run build
+npm test
 ```
 
 ## Privacy

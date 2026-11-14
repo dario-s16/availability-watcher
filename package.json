@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
-    "start": "node --env-file-if-exists=.env dist/index.js"
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "test": "npm run build && node --test test/isbn-and-url.test.mjs"
   },
   "author": "Dario Santoni",
   "license": "MIT",
