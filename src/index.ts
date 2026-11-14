@@ -1076,8 +1076,6 @@ async function runTelegramBot(): Promise<void> {
         if (message?.text !== undefined && message.chat.type === "private") {
           const telegramChatId = message.chat.id;
 
-          // console.log("Received a Telegram message.");
-
           try {
             // Receiving any private message is enough to register the user.
             registerTelegramUser(telegramChatId);
@@ -1086,10 +1084,7 @@ async function runTelegramBot(): Promise<void> {
           } catch (error) {
             const reason = error instanceof Error ? `: ${error.message}` : "";
 
-            console.error(
-              `Unable to handle Telegram message from ` +
-                `${telegramChatId}${reason}`,
-            );
+            console.error(`Unable to handle a Telegram message${reason}`);
           }
         }
 
