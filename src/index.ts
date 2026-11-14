@@ -374,9 +374,15 @@ async function addBookToWatchlist(
   isbn13: string,
   selectedBook?: LibraccioBookSearchResult,
 ): Promise<void> {
+  // The administrator can use the full global book capacity.
+  const maximumWatchesForUser =
+    telegramAdminChatId !== undefined && telegramChatId === telegramAdminChatId
+      ? maximumUniqueBooks
+      : maximumWatchesPerUser;
+
   const addResult = addProductToWatchlist(telegramChatId, source, isbn13, {
     maximumActiveUsers,
-    maximumWatchesPerUser,
+    maximumWatchesPerUser: maximumWatchesForUser,
     maximumUniqueBooks,
   });
 
@@ -392,7 +398,7 @@ async function addBookToWatchlist(
   if (addResult === "watch-limit-reached") {
     await sendMainMenuMessage(
       telegramChatId,
-      `Hai raggiunto il limite di ${maximumWatchesPerUser} libri monitorati. ` +
+      `Hai raggiunto il limite di ${maximumWatchesForUser} libri monitorati. ` +
         "Rimuovine uno prima di aggiungerne un altro.",
     );
 
