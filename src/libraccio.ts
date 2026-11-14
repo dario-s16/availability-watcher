@@ -3,7 +3,6 @@
  *
  * Author: Dario Santoni
  * Created: 2026-07-19
- * Updated: 2026-07-26
  */
 
 import type { BookMetadata } from "./book-metadata.js";
